@@ -4,10 +4,6 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/pm/pm.h>
 
-#include "dp/drivers/sensor/dpcnfg.h"
-#include "dp/faults.h"
-#include "dp/lamptest.h"
-
 LOG_MODULE_REGISTER(app, CONFIG_APP_LOG_LEVEL);
 
 extern int handle_indicators();
