@@ -1,6 +1,8 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/comparator.h>
+#include <zephyr/app_version.h>
 
 static const struct device *vload_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(vload));
 static const struct device *ntc_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(pcb_ntc));
@@ -8,6 +10,9 @@ static const struct device *csense_a_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(cu
 static const struct device *csense_b_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(current_sense_b));
 static const struct device *analog_in_a_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(analog_in_a));
 static const struct device *analog_in_b_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(analog_in_b));
+static const struct device *encoder_in_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(qdec));
+static const struct device *comp2_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(comp2));
+static const struct device *comp1_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(comp1));
 
 const struct gpio_dt_spec fault_out_a_gpio =
 	GPIO_DT_SPEC_GET_BY_IDX(DT_NODELABEL(port1), fault_gpios, 0);
@@ -62,6 +67,12 @@ static int cmd_sensors(const struct shell *sh, size_t argc, char **argv)
 		return -EIO;
 	}
 	shell_print_sensor_value_milli(sh, "TEMP", "°C", &val);
+
+	ret = sensor_channel_get(encoder_in_dev, SENSOR_CHAN_ROTATION, &val);
+	if (ret != 0) {
+		return -EIO;
+	}
+	shell_print(sh, "ENCODER=%d counts", val.val1);
 	shell_print(sh, "");
 
 	ret = sensor_channel_get(csense_a_dev, SENSOR_CHAN_CURRENT, &val);
@@ -79,6 +90,11 @@ static int cmd_sensors(const struct shell *sh, size_t argc, char **argv)
 
 	sensor_channel_get(analog_in_a_dev, SENSOR_CHAN_VOLTAGE, &val);
 	shell_print_sensor_value_milli(sh, "ANALOG_IN_A", "V", &val);
+	ret = comparator_get_output(comp2_dev);
+	if (ret < 0) {
+		return -EIO;
+	}
+	shell_print(sh, "COMP2_OUT_A=%d", ret);
 
 	shell_print(sh, "");
 
@@ -98,7 +114,21 @@ static int cmd_sensors(const struct shell *sh, size_t argc, char **argv)
 	sensor_channel_get(analog_in_b_dev, SENSOR_CHAN_VOLTAGE, &val);
 	shell_print_sensor_value_milli(sh, "ANALOG_IN_B", "V", &val);
 
+	ret = comparator_get_output(comp1_dev);
+	if (ret < 0) {
+		return -EIO;
+	}
+	shell_print(sh, "COMP1_OUT_B=%d", ret);
+
 	return 0;
 }
 
 SHELL_CMD_ARG_REGISTER(sensors, NULL, "Read sensor data", cmd_sensors, 1, 0);
+
+static int cmd_version(const struct shell *sh, size_t argc, char **argv)
+{
+	shell_print(sh, "%d.%d.%d+%d", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_PATCHLEVEL,
+		    APP_TWEAK);
+	return 0;
+}
+SHELL_CMD_ARG_REGISTER(version, NULL, "Get version", cmd_version, 1, 0);

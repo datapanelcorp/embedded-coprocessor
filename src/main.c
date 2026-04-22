@@ -4,6 +4,10 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/pm/pm.h>
 
+#include <zephyr/app_version.h>
+
+#include <stm32_ll_tim.h>
+
 LOG_MODULE_REGISTER(app, CONFIG_APP_LOG_LEVEL);
 
 extern int handle_indicators();
@@ -48,6 +52,17 @@ int main(void)
 
 	wdt_feed(wdt, wdt_channel_id);
 #endif
+
+	printk("ECP %d.%d.%d+%d\n", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_PATCHLEVEL,
+	       APP_TWEAK);
+
+	// Timers TIM1 and TIM3 are not directly connected to any I/O. Instead, they
+	// connect to the comparators internally. The upstream drivers do not have a
+	// way to configure this via pinctrl or the device tree, so we manually re-map
+	// them here.
+	// LPTIM1, used for the encoder, has a device tree binding that does this.
+	LL_TIM_SetRemap(TIM1, LL_TIM_TIM1_TI2_RMP_COMP2);
+	LL_TIM_SetRemap(TIM3, LL_TIM_TIM3_TI1_RMP_COMP1);
 
 	while (1) {
 
