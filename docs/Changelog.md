@@ -2,12 +2,12 @@
 title: "Embedded Coprocessor (ECP) Firmware"
 subtitle: "Firmware Release Notes"
 author: Data Panel Corporation
-date: "2026-02-16"
+date: "2026-04-22"
 dp-author-name: "Adam Jansen"
 dp-author-role: "Software Engineer"
 dp-release-level: "Draft"
 dp-document-number: "4xxxxx-809"
-dp-rev: X1
+dp-rev: X2
 toc-own-page: true
 figPrefix:
   - "Figure"
@@ -32,7 +32,7 @@ dp-rev-history:
 # Changelog
 
 Project
-: 4xxxxx-560
+: 45116-561
 
 % Make a new section for each release, with the newest release
 % listed first.
@@ -40,36 +40,96 @@ Project
 ## Version 0.1.0
 
 Released
-: 2026-02-xx
-
-Size
-: 443.4 KiB (454,084 bytes)
+: 2026-04-22
 
 Version
-: 0.1.2+0
+: 0.1.0+0
 
 Flash Address
-: 0x00000000
+: 0x08000000
 
 Software Part Number
-: 44005-560
+: 45116-561
 
 Hardware Part Number
-: 44005-201
+: 
+
+### Bug fixes
+
+This release does not contain any bug fixes.
+
+### Features and enhancements
+
+- Support for reading digital inputs (digital, frequency, counter and encoder)
+- Adjustable digital input threshold via DAC and comparator
+- Formatting changes to `port status` command
+- Sensor power control and monitoring (in input modes)
+- Version information printed on boot
+
+### Known Issues
+
+- Release Status
+
+  This is an engineering release for internal lab evaluation of the hardware design.
+  Please report any issues to software engineering for resolution.
+  
+- Overcurrent sensitivity
+
+  The I2T let-through algorithm for determining output overcurrent uses the same 
+  tuning values as the 43016 H-bridge. Hardware-specific tuning may be required, 
+  including the ramp times and analog filter constant.
+
+- Hardware support
+
+  Only 45116-203 rev X1 is supported by this release.
+  
+  To support configurable digital input threshold, the board must be modified at 
+  each ECP to short the following nets:
+
+  - COMP1P (TP7)
+  - COMP2P (TP8)
+  - DAC_OUT2 (TP9)
+  
+- Frequency input range
+
+  The frequency inputs cannot read frequencies below about 8 Hz. This is due to the
+  internal timer resolution. A future release will calculate these frequencies in software.
+  
+- PWMi output support
+
+  Closed-loop control of PWM output current (PWMi) is not implemented in this release.
+
+
+## Version 0.0.0
+
+Released
+: 2026-04-07
+
+Version
+: 0.0.0+0
+
+Flash Address
+: 0x08000000
+
+Software Part Number
+: 45116-561
+
+Hardware Part Number
+: 
 
 ### Bug fixes
 
 % Describe any defects, issues, or bugs that were fixed
 % or otherwise addressed in this release.
 
-- (bug fixes)
+- This release does not contain any bug fixes
 
 ### Features & Enhancements
 
 % Include any features or changes that were the result of new/modified requirements
 % Any feature added because of a bug might make more sense in the bug fixes section.
 
-- Fancy feature
+- This is the initial release, focusing on supporting PWM outputs
 
   Added a new fancy feature to support additional needs.
 
@@ -86,9 +146,9 @@ Hardware Part Number
 
 - Release Status
 
-  This is an engineering release that has not completed Data Panel validation
-  testing. Please report any issues to software engineering for resolution.
+  This is an engineering release for internal lab evaluation.
+  Please report any issues to software engineering for resolution.
 
 - Hardware support
 
-  Only 4xxxx-201 rev A is supported by this release.
+  Only 45116-203 rev X1 is supported by this release.
