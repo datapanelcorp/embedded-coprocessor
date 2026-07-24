@@ -6,7 +6,10 @@
 
 #include <zephyr/app_version.h>
 
+#include <dp/metrics.h>
+
 #include <stm32_ll_tim.h>
+#include <stm32_ll_system.h>
 
 LOG_MODULE_REGISTER(app, CONFIG_APP_LOG_LEVEL);
 
@@ -53,8 +56,8 @@ int main(void)
 	wdt_feed(wdt, wdt_channel_id);
 #endif
 
-	printk("ECP %d.%d.%d+%d\n", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_PATCHLEVEL,
-	       APP_TWEAK);
+	printk("ECP %d.%d.%d+%d-%s\n", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_PATCHLEVEL,
+	       APP_TWEAK, STRINGIFY(APP_BUILD_VERSION));
 
 	// Timers TIM1 and TIM3 are not directly connected to any I/O. Instead, they
 	// connect to the comparators internally. The upstream drivers do not have a
@@ -65,6 +68,10 @@ int main(void)
 	LL_TIM_SetRemap(TIM3, LL_TIM_TIM3_TI1_RMP_COMP1);
 
 	while (1) {
+
+		if (IS_ENABLED(CONFIG_DP_METRICS)) {
+			dp_metrics_collect();
+		}
 
 #if defined(CONFIG_WATCHDOG) && DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay)
 		wdt_feed(wdt, wdt_channel_id);

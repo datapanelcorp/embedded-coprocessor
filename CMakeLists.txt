@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.20.0)
-list(APPEND SYSCALL_INCLUDE_DIRS "${CMAKE_CURRENT_SRC_DIR}/../../include/zephyr/")
-set(CACHE SYSCALL_INCLUDE_DIRS TYPE INTERNAL VALUE "${SYSCALL_INCLUDE_DIRS}")
-
-find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+find_package(Zephyr REQUIRED)
 project(app LANGUAGES C)
 
-target_sources(app PRIVATE src/main.c src/shell.c)
+target_sources(app PRIVATE src/commands.c src/main.c)
+target_sources_ifdef(CONFIG_SHELL app PRIVATE src/shell.c)
+target_sources_ifdef(CONFIG_BINDESC_DEFINE app PRIVATE src/bindesc_dp.c)

@@ -1,0 +1,78 @@
+mainmenu "Embedded Coprocessor firmware"
+
+menu "ECP Features"
+
+config APP_ECP_IO
+    bool "Enable support for ECP I/O"
+    default y
+    depends on DP_PORTS
+    help
+        Enable support for accessing ports via ECP.
+
+config APP_ECP_PEEK_POKE
+    bool "Enable support for peek/poke"
+    default y
+    help
+        Enable support reading and writing arbitrary memory on the ECP.
+
+config APP_ECP_COMM_STATS
+    bool "Enable ECP communication statistics"
+    default y
+    help
+        Track statistical data.
+
+config APP_ECP_GPIO
+    bool "Enable ECP GPIO"
+    default y
+    depends on GPIO
+    help
+        Support setting GPIO via ECP
+
+config APP_ECP_LED
+    bool "Enable ECP LEDs"
+    default y
+    depends on LED
+    help
+        Support setting LEDs via GPIO
+
+config APP_ECP_DEVICE_EVENTS
+    bool "Enable device events"
+    depends on EVENTS
+    default n
+    help
+        Enable support for device events.
+endmenu
+
+config APP_ECP_SW_PART_NUMBER
+    string "Data Panel software part number"
+    depends on BINDESC
+    default "45116-56x"
+    help
+        This string is used by the host micro to determine ECP firmware
+        compatibility.
+
+if BINDESC_DEFINE
+
+config BINDESC_DP_APP_VERSION_BUILD
+    bool "App version build number"
+    default y
+    depends on BINDESC_DEFINE_VERSION
+
+config BINDESC_DP_APP_VERSION_STRING
+    bool "Datapanel App version string"
+    default y
+    depends on BINDESC_DEFINE_VERSION
+    help
+        Full version string, including all build information.
+        For example:
+
+            1.2.3+456gabcdef
+
+config BINDESC_DP_SW_PART_NUMBER
+    bool "Software part number string"
+    default y
+
+endif # BINDESC_DEFINE
+
+
+source "Kconfig.zephyr"

@@ -27,4 +27,4 @@ TODO: describe how coprocessor firmware gets incorporated into the block's firmw
 1. `west flash`
 
 You may need to specify additional options depending on your
-development environment. For example, `--esp-device /dev/ttyUSB0`.
+development environment. For example, `--conn-modifiers sn=066DFF5355507551870355194216`.
