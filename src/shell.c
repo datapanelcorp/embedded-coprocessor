@@ -13,16 +13,13 @@ static const struct device *analog_in_b_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL
 static const struct device *encoder_in_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(qdec));
 static const struct device *comp2_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(comp2));
 static const struct device *comp1_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(comp1));
+static const struct device *vsense_a_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(vsense_out_a));
+static const struct device *vsense_b_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(vsense_out_b));
 
 const struct gpio_dt_spec fault_out_a_gpio =
 	GPIO_DT_SPEC_GET_BY_IDX(DT_NODELABEL(port1), fault_gpios, 0);
 const struct gpio_dt_spec fault_out_b_gpio =
 	GPIO_DT_SPEC_GET_BY_IDX(DT_NODELABEL(port1), fault_gpios, 1);
-
-const struct gpio_dt_spec feedback_out_a_gpio =
-	GPIO_DT_SPEC_GET_BY_IDX(DT_NODELABEL(port1), output_feedback_gpios, 0);
-const struct gpio_dt_spec feedback_out_b_gpio =
-	GPIO_DT_SPEC_GET_BY_IDX(DT_NODELABEL(port1), output_feedback_gpios, 1);
 
 static void shell_print_sensor_value_milli(const struct shell *sh, const char *label,
 					   const char *units, struct sensor_value *val)
@@ -85,8 +82,13 @@ static int cmd_sensors(const struct shell *sh, size_t argc, char **argv)
 		return -EIO;
 	}
 	shell_print_sensor_aux_value_milli(sh, "CSENSE_OUT_A", "A", &val, "V", &val_aux);
+	struct sensor_value val_vsense;
+	ret = sensor_channel_get(vsense_a_dev, SENSOR_CHAN_VOLTAGE, &val_vsense);
+	if (ret != 0) {
+		return -EIO;
+	}
+	shell_print_sensor_value_milli(sh, "VSENSE_OUT_A", "V", &val);
 	shell_print_gpio_state(sh, &fault_out_a_gpio, "FAULT_OUT_A");
-	shell_print_gpio_state(sh, &feedback_out_a_gpio, "VSENSE_OUT_A");
 
 	sensor_channel_get(analog_in_a_dev, SENSOR_CHAN_VOLTAGE, &val);
 	shell_print_sensor_value_milli(sh, "ANALOG_IN_A", "V", &val);
@@ -108,8 +110,12 @@ static int cmd_sensors(const struct shell *sh, size_t argc, char **argv)
 	}
 	shell_print_sensor_aux_value_milli(sh, "CSENSE_OUT_B", "A", &val, "V", &val_aux);
 
+	ret = sensor_channel_get(vsense_b_dev, SENSOR_CHAN_VOLTAGE, &val_vsense);
+	if (ret != 0) {
+		return -EIO;
+	}
+	shell_print_sensor_value_milli(sh, "VSENSE_VOUT_B", "V", &val);
 	shell_print_gpio_state(sh, &fault_out_b_gpio, "FAULT_OUT_B");
-	shell_print_gpio_state(sh, &feedback_out_b_gpio, "VSENSE_OUT_B");
 
 	sensor_channel_get(analog_in_b_dev, SENSOR_CHAN_VOLTAGE, &val);
 	shell_print_sensor_value_milli(sh, "ANALOG_IN_B", "V", &val);
