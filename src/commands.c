@@ -6,17 +6,17 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/led.h>
 #include <zephyr/sys/math_extras.h>
-
+#include <zephyr/sys/reboot.h>
 #include <zephyr/sys/check.h>
 
 #include "app_version.h"
 #include "dp/ecp/ecp_device_cmd/ecp_device_cmd.h"
 #include "dp/ecp/protocol.h"
+#include "dp/dp-bindesc.h"
 
 #include "dp/drivers/port.h"
 
 #include "dp/metrics.h"
-#include "zephyr/sys/reboot.h"
 
 LOG_MODULE_REGISTER(ecp_commands, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -37,6 +37,8 @@ static enum ecp_result_code ecp_device_cmd_proto(struct ecp_device_cmd_handler_a
 ECP_DEVICE_CMD_HANDLER_RESP_ONLY(ECP_CMD_PROTO_VERSION, ecp_device_cmd_proto, ECP_VER_MASK(2),
 				 struct ecp_response_proto_version);
 
+extern struct bindesc_entry bindesc_entry_dp_sw_part_number;
+
 static enum ecp_result_code ecp_device_cmd_ident(struct ecp_device_cmd_handler_args *args)
 {
 	/* The host has provided ident data in the request, but we don't necessarily need
@@ -47,11 +49,13 @@ static enum ecp_result_code ecp_device_cmd_ident(struct ecp_device_cmd_handler_a
 		q->build);
 
 	struct ecp_response_ident *r = (void *)args->rdata;
-	*r = (const struct ecp_response_ident){.major = APP_VERSION_MAJOR,
-					       .minor = APP_VERSION_MINOR,
-					       .patch = APP_PATCHLEVEL,
-					       .build = APP_TWEAK,
-					       .sw_part_number = CONFIG_DP_DEFAULT_PART_NUMBER};
+	*r = (const struct ecp_response_ident){
+		.major = APP_VERSION_MAJOR,
+		.minor = APP_VERSION_MINOR,
+		.patch = APP_PATCHLEVEL,
+		.build = APP_TWEAK,
+	};
+	strncpy(r->sw_part_number, BINDESC_GET_STR(dp_sw_part_number), sizeof(r->sw_part_number));
 
 	args->rdata_len = sizeof(*r);
 
@@ -60,25 +64,71 @@ static enum ecp_result_code ecp_device_cmd_ident(struct ecp_device_cmd_handler_a
 ECP_DEVICE_CMD_HANDLER(ECP_CMD_IDENT, ecp_device_cmd_ident, ECP_VER_MASK(1),
 		       struct ecp_request_ident, struct ecp_response_ident);
 
-static bool config_is_supported(enum ecp_type ecp_type, uint8_t ecp_revision)
+static void port_handler_thread(void *p1, void *p2, void *p3)
 {
-	bool do_di_13a_rev1 = ecp_type == ECP_TYPE_DO_DI_13A && ecp_revision == 2;
-	bool do_di_5a_rev1 = ecp_type == ECP_TYPE_DO_DI_5A && ecp_revision == 2;
+	const struct port_init_data *pidata = p1;
+	int nports = *(int *)p2;
 
-	return do_di_13a_rev1 || do_di_5a_rev1;
+	return ports_task(pidata, nports);
 }
 
+static struct k_thread port_thread;
+#define PORT_HANDLER_STACK_SIZE 1024
+#define PORT_HANDLER_PRIORITY   4
+static K_KERNEL_STACK_DEFINE(port_handler_stack, PORT_HANDLER_STACK_SIZE);
 static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_revision)
 {
-	if (!config_is_supported(ecp_type, ecp_revision)) {
+	struct port_init_data pidata = {
+		.port = 0,
+		.dev = NULL,
+	};
+
+	switch (ecp_type) {
+	case ECP_TYPE_DO_DI_5A:
+		if (ecp_revision == 2) {
+			pidata.dev = DEVICE_DT_GET(DT_NODELABEL(port1_5a));
+		}
+		break;
+	case ECP_TYPE_DO_DI_13A:
+		if (ecp_revision == 2) {
+			pidata.dev = DEVICE_DT_GET(DT_NODELABEL(port1_13a));
+		}
+		break;
+	default:
+		break;
+	}
+
+	if (pidata.dev == NULL) {
 		return -ENOTSUP;
 	}
+
+	int ret = device_init(DEVICE_DT_GET(DT_NODELABEL(port)));
+	if (ret != 0) {
+		LOG_ERR("Could not initialize port controller: %d", ret);
+		return -ENODEV;
+	}
+
+	ret = device_init(pidata.dev);
+	if (ret != 0) {
+		LOG_ERR("Could not initialize PORT_%c: %d", '1' + pidata.port, ret);
+	}
+
+	int nports = 1;
+
+	LOG_INF("Starting port thread");
+
+	k_thread_create(&port_thread, port_handler_stack, PORT_HANDLER_STACK_SIZE,
+			port_handler_thread, (void *)&pidata, (void *)&nports, NULL,
+			PORT_HANDLER_PRIORITY, K_ESSENTIAL, K_NO_WAIT);
+	k_thread_name_set(&port_thread, "ecp_port");
+
 	return 0;
 }
 
 static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_args *args)
 {
 	const struct ecp_request_enum *q = (void *)args->qdata;
+	LOG_INF("enumerating... offset=%d type=%d rev=%d", q->offset, q->ecp_type, q->ecp_revision);
 
 	int ret = config_activate(q->offset, q->ecp_type, q->ecp_revision);
 
@@ -98,6 +148,7 @@ ECP_DEVICE_CMD_HANDLER_REQ_ONLY(ECP_CMD_ENUM, ecp_device_cmd_enum, BIT(1), struc
 
 static enum ecp_result_code ecp_device_cmd_hello(struct ecp_device_cmd_handler_args *args)
 {
+	LOG_INF("HELLO");
 	const struct ecp_request_hello *q = (void *)args->qdata;
 	struct ecp_response_hello *r = (void *)args->rdata;
 
@@ -327,6 +378,8 @@ static enum ecp_result_code ecp_device_cmd_io_set_attrib(struct ecp_device_cmd_h
 		return ECP_RES_NOT_SUPPORTED;
 	case -EINVAL:
 	default:
+		LOG_ERR("port_channel_set_attribute(PORT_1, PORT_CH_%c, %d, %lu) => %d",
+			'A' + q->ch, q->attrib_id, value, ret);
 		return ECP_RES_ERROR;
 	}
 }
