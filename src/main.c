@@ -14,8 +14,6 @@
 
 LOG_MODULE_REGISTER(app, CONFIG_APP_LOG_LEVEL);
 
-extern int handle_indicators();
-
 #if defined(CONFIG_WATCHDOG) && DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay)
 #define WDT_MAX_WINDOW       CONFIG_IWDG_STM32_INITIAL_TIMEOUT
 #define WDT_MIN_WINDOW       0
