@@ -79,7 +79,7 @@ static K_KERNEL_STACK_DEFINE(port_handler_stack, PORT_HANDLER_STACK_SIZE);
 static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_revision)
 {
 	struct port_init_data pidata = {
-		.port = 0,
+		.port = 1,
 		.dev = NULL,
 	};
 
@@ -114,8 +114,6 @@ static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_r
 	}
 
 	int nports = 1;
-
-	LOG_INF("Starting port thread");
 
 	k_thread_create(&port_thread, port_handler_stack, PORT_HANDLER_STACK_SIZE,
 			port_handler_thread, (void *)&pidata, (void *)&nports, NULL,
@@ -308,10 +306,12 @@ static int prepare_io_read_response(struct ecp_response_io_read *r, enum port_ch
 	return 0;
 }
 
-static enum ecp_result_code ecp_device_cmd_io_read(struct ecp_device_cmd_handler_args *args)
+static enum ecp_result_code ecp_device_cmd_io_read_single(struct ecp_device_cmd_handler_args *args)
 {
+	if (args->qdata_len != sizeof(struct ecp_request_io_read)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 	const struct ecp_request_io_read *q = (void *)args->qdata;
-
 	enum port_channel_id ch = (enum port_channel_id)q->ch;
 	struct ecp_response_io_read *r = (void *)args->rdata;
 
@@ -323,8 +323,42 @@ static enum ecp_result_code ecp_device_cmd_io_read(struct ecp_device_cmd_handler
 
 	return ECP_RES_SUCCESS;
 }
-ECP_DEVICE_CMD_HANDLER(ECP_CMD_IO_READ, ecp_device_cmd_io_read, BIT(2), struct ecp_request_io_read,
-		       struct ecp_response_io_read);
+
+static enum ecp_result_code ecp_device_cmd_io_read_all(struct ecp_device_cmd_handler_args *args)
+{
+	if (args->qdata_len != 0) {
+		return ECP_RES_INVALID_PARAM;
+	}
+	struct ecp_response_io_read3 *r = (void *)args->rdata;
+
+	r->nchannels = port_channel_count(PORT_1);
+
+	struct ecp_response_io_read *chdata = (struct ecp_response_io_read *)&args->rdata[1];
+	for (enum port_channel_id ch = PORT_CH_A; ch < r->nchannels; ch++) {
+		if (prepare_io_read_response(chdata, ch) != 0) {
+			args->rdata_len = 0;
+			return ECP_RES_ERROR;
+		}
+		chdata++;
+	}
+
+	args->rdata_len = sizeof(*r) + r->nchannels * sizeof(*chdata);
+
+	return ECP_RES_SUCCESS;
+}
+
+static enum ecp_result_code ecp_device_cmd_io_read(struct ecp_device_cmd_handler_args *args)
+{
+	switch (args->version) {
+	case 2:
+		return ecp_device_cmd_io_read_single(args);
+	case 3:
+		return ecp_device_cmd_io_read_all(args);
+	default:
+		return ECP_RES_UNSUPPORTED_CMD_VERSION;
+	}
+}
+ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_IO_READ, ecp_device_cmd_io_read, BIT(2) | BIT(3));
 
 static enum ecp_result_code ecp_device_cmd_io_write(struct ecp_device_cmd_handler_args *args)
 {
@@ -648,6 +682,18 @@ static struct ecp_gpio supported_gpio[] = {
 	ECP_GPIO_OUTPUT(DT_NODELABEL(led_b_b), 5), // channel B blue
 };
 
+static int setup_ecp_gpio(void)
+{
+	for (int i = 0; i < ARRAY_SIZE(supported_gpio); i++) {
+		struct ecp_gpio *gpio = &supported_gpio[i];
+		gpio_pin_configure_dt(&gpio->spec, gpio->output ? GPIO_OUTPUT | GPIO_OUTPUT_INACTIVE
+								: GPIO_INPUT);
+	}
+	return 0;
+}
+// Should be initialized just after GPIO
+SYS_INIT(setup_ecp_gpio, POST_KERNEL, 41);
+
 static enum ecp_result_code ecp_device_cmd_gpio_config(struct ecp_device_cmd_handler_args *args)
 {
 	const struct ecp_request_gpio_config *q = (void *)args->qdata;
@@ -655,21 +701,27 @@ static enum ecp_result_code ecp_device_cmd_gpio_config(struct ecp_device_cmd_han
 
 	// Ignore any pins we don't support. The direction in the
 	// response will serve as feedback.
+	//
 
+	// Default to all inputs
 	r->direction = UINT16_MAX;
 	for (int i = 0; i < ARRAY_SIZE(supported_gpio); i++) {
 		struct ecp_gpio *gpio = &supported_gpio[i];
 		if (q->mask & BIT(gpio->virt_pin)) {
-			gpio->output = (q->direction & BIT(gpio->virt_pin)) ? true : false;
-			int ret = gpio_pin_configure_dt(&gpio->spec,
-							gpio->output ? GPIO_OUTPUT : GPIO_INPUT);
+			bool is_input = q->direction & BIT(gpio->virt_pin);
+			gpio->output = !is_input;
+			int ret = gpio_pin_configure_dt(
+				&gpio->spec,
+				gpio->output ? GPIO_OUTPUT | GPIO_OUTPUT_INACTIVE : GPIO_INPUT);
 			if (ret != 0) {
 				args->rdata_len = 0;
 				return ECP_RES_ERROR;
 			}
-			if (gpio->output) {
-				r->direction ^= BIT(gpio->virt_pin);
-			}
+		}
+
+		// Clear bit for outputs; inputs are already set
+		if (gpio->output) {
+			r->direction &= ~BIT(gpio->virt_pin);
 		}
 	}
 
@@ -687,17 +739,23 @@ static enum ecp_result_code ecp_device_cmd_gpio(struct ecp_device_cmd_handler_ar
 	r->inputs = 0;
 	for (int i = 0; i < ARRAY_SIZE(supported_gpio); i++) {
 		struct ecp_gpio *gpio = &supported_gpio[i];
-		// Ignore attempts to set GPIO currently configured as inputs
-		if (gpio->output && (q->mask & BIT(gpio->virt_pin))) {
-			int ret = gpio_pin_set_dt(&gpio->spec,
-						  q->outputs & BIT(gpio->virt_pin) ? 1 : 0);
-			if (ret != 0) {
-				args->rdata_len = 0;
-				return ECP_RES_ERROR;
+
+		if (q->mask & BIT(gpio->virt_pin)) {
+			// This pin is being set
+			if (gpio->output) {
+				// Ignore attempts to set inputs
+				int value = (q->outputs & BIT(gpio->virt_pin)) ? 1 : 0;
+				int ret = gpio_pin_set_dt(&gpio->spec, value);
+				if (ret != 0) {
+					args->rdata_len = 0;
+					return ECP_RES_ERROR;
+				}
 			}
 		}
 		// Always update response value for supported GPIO
-		r->inputs |= gpio_pin_get_dt(&gpio->spec) << gpio->virt_pin;
+		if (!gpio->output) {
+			r->inputs |= gpio_pin_get_dt(&gpio->spec) << gpio->virt_pin;
+		}
 	}
 
 	args->rdata_len = sizeof(*r);
