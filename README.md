@@ -28,3 +28,12 @@ TODO: describe how coprocessor firmware gets incorporated into the block's firmw
 
 You may need to specify additional options depending on your
 development environment. For example, `--conn-modifiers sn=066DFF5355507551870355194216`.
+
+## Simulation
+
+The firmware also builds for Zephyr's `native_sim` target, which runs on the host. The
+ports are replaced by fakes (`dp,port-fake`) and ECP requests use the simulator backend
+instead of the UART. See `boards/native_sim.overlay`.
+
+`west build -p always -b native_sim apps/embedded-coprocessor`
+
