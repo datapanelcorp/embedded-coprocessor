@@ -1,0 +1,14 @@
+config TEST_ECP_KNOWN_DEVIATIONS
+	bool "Run tests for known deviations from the ECP specification"
+	help
+	  Tests for behavior that doesn't yet match the ECP protocol
+	  specification. They fail until the deviation is fixed, so by default
+	  they're skipped.
+
+config TEST_ECP_ENUM_13A
+	bool "Enumerate as a 13A DO_DI port"
+	help
+	  Enumerate as ECP_TYPE_DO_DI_13A instead of ECP_TYPE_DO_DI_5A.
+
+# The application's options (APP_ECP_*), which also sources Kconfig.zephyr
+rsource "../../Kconfig"

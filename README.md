@@ -37,3 +37,30 @@ instead of the UART. See `boards/native_sim.overlay`.
 
 `west build -p always -b native_sim apps/embedded-coprocessor`
 
+## Testing
+
+Tests for the ECP command handlers are in `tests/`. They run on `native_sim`, together
+with the dpunity tests:
+
+`west dp-test --sanitize`
+
+To run only this application's tests:
+
+`west twister -p native_sim -T apps/embedded-coprocessor/tests`
+
+- `tests/commands` sends requests through the ECP device command handler, as the host
+  would, and checks the responses. The ports are fakes, so tests control what the port
+  driver returns and check how it was called. Because ENUM can't be undone, the suites
+  run in phases: unconfigured, ENUM, active, then ESTOP. Scenarios in `testcase.yaml`
+  cover 13A enumeration, LED support, and optional features disabled.
+- `tests/reboot` covers REBOOT and BOOT_JUMP, which never return, with one scenario each.
+
+### Known deviations from the specification
+
+Tests for behavior the ECP protocol specification requires, but the firmware doesn't
+yet implement, are skipped. Each prints `Known deviation from spec` with the reason.
+To run them, pass `-x CONFIG_TEST_ECP_KNOWN_DEVIATIONS=y` to twister. Some deviations
+reboot the ECP, which ends the test run, so run those individually with the
+executable's `-test=<suite>::<test>` option.
+
+Also see `ztest/README.md` in the top-level repo.
