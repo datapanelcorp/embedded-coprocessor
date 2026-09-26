@@ -24,8 +24,13 @@ static enum ecp_result_code ecp_device_cmd_proto(struct ecp_device_cmd_handler_a
 {
 	struct ecp_response_proto_version *r = (void *)args->rdata;
 	r->versions = BIT(ECP_PROTO_VERSION);
-	r->max_request_packet_size = CONFIG_ECP_DEVICE_CMD_HANDLER_RX_BUFFER_SIZE;
-	r->max_response_packet_size = CONFIG_ECP_DEVICE_CMD_HANDLER_TX_BUFFER_SIZE;
+	/* Limited by the buffers, and by the largest payload the header can describe */
+	r->max_request_packet_size =
+		MIN(CONFIG_ECP_DEVICE_CMD_HANDLER_RX_BUFFER_SIZE,
+		    ECP_REQUEST_HEADER_SIZE + ECP_MAX_PAYLOAD_BYTES + ECP_DATA_CRC_SIZE);
+	r->max_response_packet_size =
+		MIN(CONFIG_ECP_DEVICE_CMD_HANDLER_TX_BUFFER_SIZE,
+		    ECP_RESPONSE_HEADER_SIZE + ECP_MAX_PAYLOAD_BYTES + ECP_DATA_CRC_SIZE);
 	r->flags = 0;
 #if defined(CONFIG_ECP_DEVICE_CMD_IN_PROGRESS_STATUS)
 	r->flags |= ECP_PROTOCOL_INFO_IN_PROGRESS_SUPPORTED;
@@ -432,9 +437,9 @@ static enum ecp_result_code ecp_device_cmd_io_pause(struct ecp_device_cmd_handle
 		enum port_channel_id ch = index;
 
 		bool pause = q->pause & BIT(index);
+		int ret = pause ? port_channel_pause(PORT_1, ch) : port_channel_resume(PORT_1, ch);
 
-		if ((pause && port_channel_pause(PORT_1, ch) != 0) ||
-		    (port_channel_resume(PORT_1, ch) != 0)) {
+		if (ret != 0) {
 			return ECP_RES_INVALID_PARAM;
 		}
 
@@ -546,7 +551,7 @@ static enum ecp_result_code ecp_device_cmd_led_brightness(struct ecp_device_cmd_
 		return ECP_RES_INVALID_PARAM;
 	}
 	// Otherwise, set a single LED
-	const struct device *led = &supported_leds[q->led];
+	const struct ecp_led *led = &supported_leds[q->led];
 	int ret = led_set_brightness(led->dev, led->index, q->brightness);
 
 	return (ret == 0) ? ECP_RES_SUCCESS : ECP_RES_ERROR;
