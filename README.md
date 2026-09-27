@@ -54,6 +54,9 @@ To run only this application's tests:
   run in phases: unconfigured, ENUM, active, then ESTOP. Scenarios in `testcase.yaml`
   cover 13A enumeration, LED support, and optional features disabled.
 - `tests/reboot` covers REBOOT and BOOT_JUMP, which never return, with one scenario each.
+- `tests/host` runs the ECP host driver, as used by the main MCU, against this
+  application over a pair of emulated UARTs. It can corrupt bytes on the "wire" to test
+  error recovery.
 
 ### Known deviations from the specification
 

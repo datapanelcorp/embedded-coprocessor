@@ -1,0 +1,32 @@
+/*
+ * Two emulated UARTs: one for the ECP host driver, and one for the ECP's device command
+ * UART backend. The test connects them to each other.
+ */
+
+/ {
+    chosen {
+        dp,ecp-device-cmd-uart-backend = &uart_ecp;
+    };
+
+    uart_host: uart-emul-host {
+        compatible = "zephyr,uart-emul";
+        status = "okay";
+        current-speed = <1000000>;
+        rx-fifo-size = <2048>;
+        tx-fifo-size = <2048>;
+
+        ecp: ecp {
+            compatible = "dp,ecp-host-uart";
+            status = "okay";
+            #ecp-cells = <0>;
+        };
+    };
+
+    uart_ecp: uart-emul-ecp {
+        compatible = "zephyr,uart-emul";
+        status = "okay";
+        current-speed = <1000000>;
+        rx-fifo-size = <2048>;
+        tx-fifo-size = <2048>;
+    };
+};

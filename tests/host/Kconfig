@@ -1,0 +1,2 @@
+# TEST_ECP_KNOWN_DEVIATIONS, and the application's options (APP_ECP_*)
+rsource "../commands/Kconfig"
