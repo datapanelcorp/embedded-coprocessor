@@ -17,14 +17,6 @@
 
 DEFINE_FFF_GLOBALS;
 
-/* Skip the rest of the test unless CONFIG_TEST_ECP_KNOWN_DEVIATIONS is set */
-#define ECP_KNOWN_DEVIATION(_why)                                                                  \
-	do {                                                                                       \
-		if (!IS_ENABLED(CONFIG_TEST_ECP_KNOWN_DEVIATIONS)) {                               \
-			TC_PRINT("Known deviation from spec: %s\n", _why);                         \
-			ztest_test_skip();                                                         \
-		}                                                                                  \
-	} while (0)
 
 #define HOST_UART DEVICE_DT_GET(DT_NODELABEL(uart_host))
 #define ECP_UART  DEVICE_DT_GET(DT_NODELABEL(uart_ecp))
@@ -148,23 +140,24 @@ ZTEST(ecp_host, test_2_enum_and_io)
 }
 
 /* The ECP can't tell how long a request with a corrupted header is, so it drops it
- * without responding. The host must send it again (spec figure 9).
+ * without responding, and waits for the UART to go idle. The host times out and sends
+ * it again (spec figure 9).
  */
 ZTEST(ecp_host, test_3_corrupted_request_header_retried)
 {
-	ECP_KNOWN_DEVIATION("The host doesn't retry after a timeout, and gives up before the "
-			    "ECP's UART backend recovers from the bad frame");
-
 	struct ecp_request_hello q = {.in_data = 1};
-	struct ecp_response_comm_stats before = comm_stats();
+	int64_t start = k_uptime_get();
 
 	atomic_set(&corrupt_to_ecp, 1);
 	int ret = command(ECP_CMD_HELLO, 1, &q, sizeof(q));
 	zassert_ok(ret, "Command failed: %d", ret);
 	zassert_equal(sys_get_le32(resp), 1 + 0x01020304);
 
-	struct ecp_response_comm_stats after = comm_stats();
-	zassert_true(after.error_count > before.error_count, "ECP didn't see the corruption");
+	/* The ECP never sees the bad request, so check that it was corrupted, and that the
+	 * host waited for a response before sending it again.
+	 */
+	zassert_equal(atomic_get(&corrupt_to_ecp), 0, "Request wasn't corrupted");
+	zassert_true(k_uptime_get() - start >= 50, "Host didn't time out and retry");
 }
 
 /* The host rejects a corrupted response and asks for it again. The ECP must resend it,
@@ -176,9 +169,6 @@ ZTEST(ecp_host, test_3_corrupted_request_header_retried)
  */
 ZTEST(ecp_host, test_3_corrupted_request_data_retried)
 {
-	ECP_KNOWN_DEVIATION("Error responses use sequence number 0 and replace the cached "
-			    "response, so the ECP answers the retry with the error again");
-
 	struct ecp_request_hello q = {.in_data = 2};
 	struct ecp_response_comm_stats before = comm_stats();
 

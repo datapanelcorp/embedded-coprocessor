@@ -55,7 +55,7 @@ static int host_receive(const struct ecp_device_cmd_backend *backend)
 	return 0;
 }
 
-static void check_response(void)
+static void check_response(const uint8_t *request, size_t request_len)
 {
 	const struct ecp_response_header *header = (void *)rctx->buf;
 
@@ -83,6 +83,13 @@ static void check_response(void)
 	if (data_len > 0 && header->result != ECP_RES_SUCCESS &&
 	    header->result != ECP_RES_IN_PROGRESS) {
 		fail("error response has data");
+	}
+
+	/* Every response echoes the request's sequence number and duplicate flag */
+	const uint8_t echoed = ECP_SEQ_NUM_MASK | ECP_SEQ_DUP_MASK;
+
+	if (request_len > 0 && (header->flags & echoed) != (request[0] & echoed)) {
+		fail("response doesn't echo the request's sequence number");
 	}
 }
 
@@ -145,7 +152,7 @@ static void send_frame(uint8_t flags, const uint8_t *data, size_t len)
 	if (k_sem_take(&response_ready, K_MSEC(INPUT_TIMEOUT_MS)) != 0) {
 		fail("no response");
 	}
-	check_response();
+	check_response(frame, len);
 }
 
 static void run_input(const uint8_t *data, size_t len)

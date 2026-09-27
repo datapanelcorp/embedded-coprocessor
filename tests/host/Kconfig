@@ -1,2 +1,2 @@
-# TEST_ECP_KNOWN_DEVIATIONS, and the application's options (APP_ECP_*)
-rsource "../commands/Kconfig"
+# The application's options (APP_ECP_*), which also sources Kconfig.zephyr
+rsource "../../Kconfig"
