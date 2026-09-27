@@ -82,6 +82,72 @@ static void port_handler_thread(void *p1, void *p2, void *p3)
  */
 static bool ecp_active;
 
+/* The port set up by the first successful ENUM. Later ENUMs must match it. */
+static bool ports_configured;
+static uint8_t configured_type;
+static uint8_t configured_revision;
+
+/* Channel state from before entering the safe state, restored by the next ENUM */
+static struct {
+	bool paused;
+	int sensor_power;
+} saved_channels[CONFIG_DP_PORTS_MAX_NUM_CHANNELS];
+
+/* Return all I/O to a safe state, and enter the unconfigured state (ECP protocol
+ * specification, ECP_CMD_ESTOP). Every channel is paused, which turns its output off, and
+ * its sensor power is turned off.
+ */
+static int enter_safe_state(void)
+{
+	bool was_active = ecp_active;
+	int ret = 0;
+
+	ecp_active = false;
+	if (!ports_configured) {
+		return 0;
+	}
+
+	int nchannels = port_channel_count(PORT_1);
+	for (enum port_channel_id ch = PORT_CH_A; ch < nchannels; ch++) {
+		/* Keep the state from before the first ESTOP, if there's more than one */
+		if (was_active) {
+			saved_channels[ch].paused = port_channel_paused(PORT_1, ch) == 1;
+			if (port_channel_get_sensor_power(PORT_1, ch,
+							  &saved_channels[ch].sensor_power) != 0) {
+				saved_channels[ch].sensor_power = 0;
+			}
+		}
+
+		int err = port_channel_pause(PORT_1, ch);
+		if (err != 0 && err != -ENOTSUP) {
+			ret = err;
+		}
+		err = port_channel_set_sensor_power(PORT_1, ch, 0);
+		if (err != 0 && err != -ENOTSUP) {
+			ret = err;
+		}
+	}
+	return ret;
+}
+
+/* Restore the channels to how they were before entering the safe state. Channels with a
+ * fault stay paused until the fault is cleared.
+ */
+static void leave_safe_state(void)
+{
+	int nchannels = port_channel_count(PORT_1);
+
+	for (enum port_channel_id ch = PORT_CH_A; ch < nchannels; ch++) {
+		if (saved_channels[ch].sensor_power > 0) {
+			port_channel_set_sensor_power(PORT_1, ch, saved_channels[ch].sensor_power);
+		}
+		if (!saved_channels[ch].paused) {
+			port_channel_resume(PORT_1, ch);
+		}
+	}
+	ecp_active = true;
+}
+
 static struct k_thread port_thread;
 #define PORT_HANDLER_STACK_SIZE 1024
 #define PORT_HANDLER_PRIORITY   4
@@ -144,6 +210,15 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 	const struct ecp_request_enum *q = (void *)args->qdata;
 	LOG_INF("enumerating... offset=%d type=%d rev=%d", q->offset, q->ecp_type, q->ecp_revision);
 
+	/* Enumerated again, after ESTOP. The ports are already set up, and can't change. */
+	if (ports_configured) {
+		if (q->ecp_type != configured_type || q->ecp_revision != configured_revision) {
+			return ECP_RES_INVALID_PARAM;
+		}
+		leave_safe_state();
+		return ECP_RES_SUCCESS;
+	}
+
 	int ret = config_activate(q->offset, q->ecp_type, q->ecp_revision);
 
 	args->rdata_len = 0;
@@ -153,6 +228,9 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 	case -ENOTSUP:
 		return ECP_RES_INVALID_PARAM;
 	case 0:
+		ports_configured = true;
+		configured_type = q->ecp_type;
+		configured_revision = q->ecp_revision;
 		ecp_active = true;
 		return ECP_RES_SUCCESS;
 	default:
@@ -202,6 +280,9 @@ static enum ecp_result_code ecp_device_cmd_reboot(struct ecp_device_cmd_handler_
 	}
 	args->rdata_len = 0;
 
+	/* Everything ESTOP does, before restarting */
+	enter_safe_state();
+
 	/* BUSY if another long-running command hasn't finished */
 	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(reboot_continue, NULL);
 
@@ -225,10 +306,11 @@ static enum ecp_result_code ecp_device_cmd_features(struct ecp_device_cmd_handle
 ECP_DEVICE_CMD_HANDLER_RESP_ONLY(ECP_CMD_FEATURES, ecp_device_cmd_features, BIT(1),
 				 struct ecp_response_features);
 
+static enum ecp_result_code estop_result;
+
 static enum ecp_result_code estop_continue(void *user_data)
 {
-	// TODO: get to a safe state
-	return ECP_RES_SUCCESS;
+	return estop_result;
 }
 
 static enum ecp_result_code ecp_device_cmd_estop(struct ecp_device_cmd_handler_args *args)
@@ -237,6 +319,11 @@ static enum ecp_result_code ecp_device_cmd_estop(struct ecp_device_cmd_handler_a
 		return ECP_RES_INVALID_COMMAND;
 	}
 	args->rdata_len = 0;
+
+	/* Stop right away, even if another long-running command hasn't finished. The final
+	 * result reports whether every channel reached the safe state.
+	 */
+	estop_result = (enter_safe_state() == 0) ? ECP_RES_SUCCESS : ECP_RES_ERROR;
 
 	/* BUSY if another long-running command hasn't finished */
 	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(estop_continue, NULL);
@@ -258,6 +345,9 @@ static enum ecp_result_code ecp_device_cmd_boot_jump(struct ecp_device_cmd_handl
 		return ECP_RES_INVALID_COMMAND;
 	}
 	args->rdata_len = 0;
+
+	/* Everything ESTOP does, before restarting */
+	enter_safe_state();
 
 	/* BUSY if another long-running command hasn't finished */
 	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(boot_jump_continue, NULL);

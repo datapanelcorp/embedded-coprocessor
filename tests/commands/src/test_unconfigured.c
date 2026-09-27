@@ -108,6 +108,8 @@ ZTEST(ecp_unconfigured, test_estop_unconfigured)
 	ecp_test_expect_in_progress_result(ECP_RES_SUCCESS);
 
 	zassert_false(device_is_ready(ECP_TEST_PORT));
+	zassert_equal(port_fake_pause_fake.call_count, 0);
+	zassert_equal(port_fake_set_sensor_power_fake.call_count, 0);
 }
 
 ZTEST_SUITE(ecp_unconfigured, ecp_phase_unconfigured, NULL, NULL, NULL, NULL);

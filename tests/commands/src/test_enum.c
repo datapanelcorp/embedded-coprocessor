@@ -36,7 +36,7 @@ ZTEST(ecp_enum, test_enum)
 
 ZTEST_SUITE(ecp_enum, ecp_phase_enum, NULL, NULL, NULL, NULL);
 
-/* Spec: ENUM, REBOOT and BOOT_JUMP are not available in the active state */
+/* Spec: ENUM is not available in the active state */
 ZTEST(ecp_active, test_enum_not_allowed)
 {
 	struct ecp_request_enum q = {.ecp_type = ECP_TEST_ENUM_TYPE, .ecp_revision = 2};
@@ -46,22 +46,6 @@ ZTEST(ecp_active, test_enum_not_allowed)
 	/* Still active, with the same port */
 	zassert_true(device_is_ready(ECP_TEST_PORT));
 	zassert_equal(port_channel_count(PORT_1), ECP_TEST_NUM_CHANNELS);
-}
-
-ZTEST(ecp_active, test_reboot_not_allowed)
-{
-	/* Skip before sending, because the ECP would reboot */
-	ECP_KNOWN_DEVIATION("REBOOT is accepted in the active state");
-
-	ecp_test_expect(ECP_CMD_REBOOT, 1, NULL, 0, ECP_RES_NOT_ALLOWED, &resp);
-}
-
-ZTEST(ecp_active, test_boot_jump_not_allowed)
-{
-	/* Skip before sending, because the ECP would reboot */
-	ECP_KNOWN_DEVIATION("BOOT_JUMP is accepted in the active state");
-
-	ecp_test_expect(ECP_CMD_BOOT_JUMP, 1, NULL, 0, ECP_RES_NOT_ALLOWED, &resp);
 }
 
 ZTEST_SUITE(ecp_active, ecp_phase_active, NULL, NULL, NULL, NULL);

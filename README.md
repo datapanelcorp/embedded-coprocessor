@@ -78,12 +78,14 @@ earlier ones left off. When it finds a crash, it saves the input as `crash-<hash
 `build-fuzz/zephyr/zephyr.exe crash-<hash>` to reproduce it.
 
 PEEK and POKE are disabled in the fuzz target, because on `native_sim` they accept any
-address. ENUM, REBOOT and BOOT_JUMP are sent only once, at startup, or not at all.
+address. REBOOT and BOOT_JUMP are never sent. Each input starts with the ECP enumerated,
+even if the previous one sent ESTOP.
 
 ### Known deviations from the specification
 
 Tests for behavior the ECP protocol specification requires, but the firmware doesn't
-yet implement, are skipped. Each prints `Known deviation from spec` with the reason.
+yet implement, are marked with `ECP_KNOWN_DEVIATION()` and skipped. There are none at
+the moment. Each prints `Known deviation from spec` with the reason.
 To run them, pass `-x CONFIG_TEST_ECP_KNOWN_DEVIATIONS=y` to twister. Some deviations
 reboot the ECP, which ends the test run, so run those individually with the
 executable's `-test=<suite>::<test>` option.

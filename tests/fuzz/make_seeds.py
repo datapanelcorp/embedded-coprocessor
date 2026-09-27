@@ -19,6 +19,7 @@ PROTO_VERSION = 2
 REQUESTS = [
     ("proto_version", 0x0000, 2, b""),
     ("ident", 0x0001, 1, struct.pack("<BBHI16s", 1, 2, 3, 4, b"45116-560")),
+    ("enum", 0x0002, 1, struct.pack("<BBB", 0, 1, 2)),
     ("hello", 0x0003, 1, struct.pack("<I", 0x12345678)),
     ("echo", 0x0004, 1, bytes(range(16))),
     ("features", 0x0006, 1, b""),
@@ -58,10 +59,10 @@ def main():
         (out / name).write_bytes(record(request(command, version, payload)))
 
     # A request, then a duplicate of it
-    hello = REQUESTS[2]
+    _, command, version, payload = next(r for r in REQUESTS if r[0] == "hello")
     (out / "hello_dup").write_bytes(
-        record(request(hello[1], hello[2], hello[3], seq=1))
-        + record(request(hello[1], hello[2], hello[3], seq=1, dup=True))
+        record(request(command, version, payload, seq=1))
+        + record(request(command, version, payload, seq=1, dup=True))
     )
 
 

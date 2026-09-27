@@ -122,9 +122,6 @@ static bool skip_frame(const uint8_t *buf, size_t len)
 	case ECP_CMD_BOOT_JUMP:
 		/* Restart the ECP (and exit the process) */
 		return true;
-	case ECP_CMD_ENUM:
-		/* Sent once at startup. A second ENUM is a known defect. */
-		return true;
 	default:
 		return false;
 	}
@@ -167,6 +164,7 @@ static void run_input(const uint8_t *data, size_t len)
 	}
 }
 
+/* Make sure the ECP is active, even if the last input sent ESTOP */
 static void enumerate(void)
 {
 	const struct ecp_request_enum q = {.ecp_type = ECP_TYPE_DO_DI_5A, .ecp_revision = 2};
@@ -180,9 +178,15 @@ static void enumerate(void)
 	size_t len = ECP_REQUEST_HEADER_SIZE + sizeof(q) + ECP_DATA_CRC_SIZE;
 	fix_crcs(frame, len);
 
+	k_sem_reset(&response_ready);
 	ecp_device_cmd_backend_sim_data_received(frame, len);
-	if (k_sem_take(&response_ready, K_MSEC(INPUT_TIMEOUT_MS)) != 0 ||
-	    rctx->buf[offsetof(struct ecp_response_header, result)] != ECP_RES_SUCCESS) {
+	if (k_sem_take(&response_ready, K_MSEC(INPUT_TIMEOUT_MS)) != 0) {
+		fail("no response to ENUM");
+	}
+
+	/* NOT_ALLOWED if already active */
+	uint8_t result = rctx->buf[offsetof(struct ecp_response_header, result)];
+	if (result != ECP_RES_SUCCESS && result != ECP_RES_NOT_ALLOWED) {
 		fail("ENUM failed");
 	}
 }
@@ -198,14 +202,14 @@ int main(void)
 {
 	ecp_device_cmd_backend_sim_install_send_cb(host_receive, &rctx);
 
-	/* Fuzz the active state, where most commands are available */
-	enumerate();
-
 	IRQ_CONNECT(CONFIG_ECP_FUZZ_IRQ, 0, fuzz_isr, NULL, 0);
 	irq_enable(CONFIG_ECP_FUZZ_IRQ);
 
 	while (true) {
 		k_sem_take(&input_ready, K_FOREVER);
+
+		/* Start each input in the active state, where most commands are available */
+		enumerate();
 		run_input(fuzz_data, fuzz_len);
 		input_done = true;
 	}
