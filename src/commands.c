@@ -287,19 +287,20 @@ static int prepare_io_read_response(struct ecp_response_io_read *r, enum port_ch
 		return ret;
 	}
 
+	/* Values the port can't provide are reported as -1 (ECP protocol specification) */
 	uint32_t raw = -1UL;
 	port_channel_get_raw_value(PORT_1, ch, &raw);
 
-	int scaled = INT_MIN;
+	int scaled = -1;
 	port_channel_get_value(PORT_1, ch, &scaled);
 
-	int voltage = INT_MIN;
+	int voltage = -1;
 	port_channel_get_analog_value(PORT_1, ch, &voltage);
 
-	int current = INT_MIN;
+	int current = -1;
 	port_channel_get_current(PORT_1, ch, &current);
 
-	int temperature = INT_MIN;
+	int temperature = -1;
 	port_channel_get_temperature(PORT_1, ch, &temperature);
 
 	enum port_channel_fault_status fault_status = PORT_CH_FAULT_OTHER;

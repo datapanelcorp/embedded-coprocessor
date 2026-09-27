@@ -194,11 +194,9 @@ ZTEST(ecp_io, test_io_read_unsupported_status)
 	zassert_equal(FIELD_GET(ECP_IO_F_PAUSED, r.flags), 0);
 }
 
-/* Spec: voltage, current and temperature are -1 when not available */
+/* Spec: values the port can't provide are -1 */
 ZTEST(ecp_io, test_io_read_unsupported_values)
 {
-	ECP_KNOWN_DEVIATION("IO_READ reports INT_MIN, not -1, for unavailable values");
-
 	struct ecp_request_io_read q = {.ch = PORT_CH_A};
 
 	only_mode_supported();
@@ -206,6 +204,8 @@ ZTEST(ecp_io, test_io_read_unsupported_values)
 
 	struct ecp_response_io_read r;
 	memcpy(&r, resp.data, sizeof(r));
+	zassert_equal(r.raw, UINT32_MAX);
+	zassert_equal((int32_t)r.scaled, -1);
 	zassert_equal(r.voltage, -1);
 	zassert_equal(r.current, -1);
 	zassert_equal(r.temperature, -1);
