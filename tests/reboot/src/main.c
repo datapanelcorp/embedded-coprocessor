@@ -41,10 +41,6 @@ ZTEST(ecp_reboot, test_1_reboots)
  */
 ZTEST(ecp_reboot, test_2_estop_while_pending)
 {
-	ECP_KNOWN_DEVIATION("Commands ignore the BUSY result of "
-			    "ecp_device_cmd_send_in_progress_continue(), so a second one returns "
-			    "IN_PROGRESS but never runs");
-
 	ecp_test_expect(ECP_CMD_ESTOP, 1, NULL, 0, ECP_RES_BUSY, &resp);
 }
 

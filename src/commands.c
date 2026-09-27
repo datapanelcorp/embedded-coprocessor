@@ -77,13 +77,22 @@ static void port_handler_thread(void *p1, void *p2, void *p3)
 	return ports_task(pidata, nports);
 }
 
+/* The ECP is unconfigured until ENUM succeeds, and then active (ECP protocol specification,
+ * "Network layer"). Some commands are only available in one of the states.
+ */
+static bool ecp_active;
+
 static struct k_thread port_thread;
 #define PORT_HANDLER_STACK_SIZE 1024
 #define PORT_HANDLER_PRIORITY   4
 static K_KERNEL_STACK_DEFINE(port_handler_stack, PORT_HANDLER_STACK_SIZE);
 static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_revision)
 {
-	struct port_init_data pidata = {
+	/* The port handler thread keeps using these */
+	static struct port_init_data pidata;
+	static int nports = 1;
+
+	pidata = (struct port_init_data){
 		.port = 1,
 		.dev = NULL,
 	};
@@ -118,8 +127,6 @@ static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_r
 		LOG_ERR("Could not initialize PORT_%c: %d", '1' + pidata.port, ret);
 	}
 
-	int nports = 1;
-
 	k_thread_create(&port_thread, port_handler_stack, PORT_HANDLER_STACK_SIZE,
 			port_handler_thread, (void *)&pidata, (void *)&nports, NULL,
 			PORT_HANDLER_PRIORITY, K_ESSENTIAL, K_NO_WAIT);
@@ -130,6 +137,10 @@ static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_r
 
 static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_args *args)
 {
+	if (ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
+
 	const struct ecp_request_enum *q = (void *)args->qdata;
 	LOG_INF("enumerating... offset=%d type=%d rev=%d", q->offset, q->ecp_type, q->ecp_revision);
 
@@ -142,6 +153,7 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 	case -ENOTSUP:
 		return ECP_RES_INVALID_PARAM;
 	case 0:
+		ecp_active = true;
 		return ECP_RES_SUCCESS;
 	default:
 		return ECP_RES_ERROR;
@@ -190,9 +202,10 @@ static enum ecp_result_code ecp_device_cmd_reboot(struct ecp_device_cmd_handler_
 	}
 	args->rdata_len = 0;
 
-	ecp_device_cmd_send_in_progress_continue(reboot_continue, NULL);
+	/* BUSY if another long-running command hasn't finished */
+	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(reboot_continue, NULL);
 
-	return ECP_RES_IN_PROGRESS;
+	return (result == ECP_RES_SUCCESS) ? ECP_RES_IN_PROGRESS : result;
 }
 ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_REBOOT, ecp_device_cmd_reboot, BIT(1));
 
@@ -225,9 +238,10 @@ static enum ecp_result_code ecp_device_cmd_estop(struct ecp_device_cmd_handler_a
 	}
 	args->rdata_len = 0;
 
-	ecp_device_cmd_send_in_progress_continue(estop_continue, NULL);
+	/* BUSY if another long-running command hasn't finished */
+	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(estop_continue, NULL);
 
-	return ECP_RES_IN_PROGRESS;
+	return (result == ECP_RES_SUCCESS) ? ECP_RES_IN_PROGRESS : result;
 }
 ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_ESTOP, ecp_device_cmd_estop, BIT(1));
 
@@ -245,13 +259,21 @@ static enum ecp_result_code ecp_device_cmd_boot_jump(struct ecp_device_cmd_handl
 	}
 	args->rdata_len = 0;
 
-	ecp_device_cmd_send_in_progress_continue(boot_jump_continue, NULL);
+	/* BUSY if another long-running command hasn't finished */
+	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(boot_jump_continue, NULL);
 
-	return ECP_RES_IN_PROGRESS;
+	return (result == ECP_RES_SUCCESS) ? ECP_RES_IN_PROGRESS : result;
 }
 ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_BOOT_JUMP, ecp_device_cmd_boot_jump, BIT(1));
 
 #if defined(CONFIG_APP_ECP_IO)
+
+static bool channel_valid(uint8_t ch)
+{
+	int nchannels = port_channel_count(PORT_1);
+
+	return nchannels > 0 && ch < nchannels;
+}
 
 static int prepare_io_read_response(struct ecp_response_io_read *r, enum port_channel_id ch)
 {
@@ -317,6 +339,9 @@ static enum ecp_result_code ecp_device_cmd_io_read_single(struct ecp_device_cmd_
 		return ECP_RES_INVALID_PARAM;
 	}
 	const struct ecp_request_io_read *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 	enum port_channel_id ch = (enum port_channel_id)q->ch;
 	struct ecp_response_io_read *r = (void *)args->rdata;
 
@@ -354,6 +379,10 @@ static enum ecp_result_code ecp_device_cmd_io_read_all(struct ecp_device_cmd_han
 
 static enum ecp_result_code ecp_device_cmd_io_read(struct ecp_device_cmd_handler_args *args)
 {
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
+
 	switch (args->version) {
 	case 2:
 		return ecp_device_cmd_io_read_single(args);
@@ -367,7 +396,13 @@ ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_IO_READ, ecp_device_cmd_io_read, BIT(2) |
 
 static enum ecp_result_code ecp_device_cmd_io_write(struct ecp_device_cmd_handler_args *args)
 {
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_write *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
 	int ret = port_channel_write(PORT_1, q->ch, q->value);
 
@@ -378,7 +413,13 @@ ECP_DEVICE_CMD_HANDLER_REQ_ONLY(ECP_CMD_IO_WRITE, ecp_device_cmd_io_write, BIT(1
 
 enum ecp_result_code ecp_device_cmd_io_get_attrib(struct ecp_device_cmd_handler_args *args)
 {
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_get_attrib *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 	struct ecp_response_io_get_attrib *r = (void *)args->rdata;
 
 	uintptr_t value;
@@ -405,7 +446,13 @@ ECP_DEVICE_CMD_HANDLER(ECP_CMD_IO_GET_ATTRIB, ecp_device_cmd_io_get_attrib, BIT(
 static enum ecp_result_code ecp_device_cmd_io_set_attrib(struct ecp_device_cmd_handler_args *args)
 {
 	args->rdata_len = 0;
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_set_attrib *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
 	uintptr_t value = (uintptr_t)q->value;
 	int ret = port_channel_set_attribute(PORT_1, (enum port_channel_id)q->ch,
@@ -429,6 +476,15 @@ static enum ecp_result_code ecp_device_cmd_io_pause(struct ecp_device_cmd_handle
 {
 	const struct ecp_request_io_pause *q = (void *)args->qdata;
 	args->rdata_len = 0;
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
+
+	/* Check every channel before pausing or resuming any of them */
+	int nchannels = port_channel_count(PORT_1);
+	if (nchannels <= 0 || (q->ch_mask & ~BIT_MASK(nchannels)) != 0) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
 	// For each bit in the mask, pause or resume the corresponding channel
 	uint32_t mask = q->ch_mask;
@@ -451,7 +507,7 @@ static enum ecp_result_code ecp_device_cmd_io_pause(struct ecp_device_cmd_handle
 	args->rdata_len = sizeof(*r);
 	r->paused = 0;
 
-	for (enum port_channel_id ch = PORT_CH_A; ch < port_channel_count(PORT_1); ch++) {
+	for (enum port_channel_id ch = PORT_CH_A; ch < nchannels; ch++) {
 		if (port_channel_paused(PORT_1, ch) == 1) {
 			r->paused |= BIT(ch);
 		}
@@ -465,7 +521,13 @@ ECP_DEVICE_CMD_HANDLER(ECP_CMD_IO_PAUSE, ecp_device_cmd_io_pause, BIT(1),
 static enum ecp_result_code ecp_device_cmd_io_clear_fault(struct ecp_device_cmd_handler_args *args)
 {
 	args->rdata_len = 0;
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_clear_fault *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
 	enum port_channel_id ch = (enum port_channel_id)q->ch;
 	if (port_channel_clear_fault(PORT_1, ch) != 0) {

@@ -330,8 +330,6 @@ ZTEST(ecp_io, test_io_clear_fault)
  */
 ZTEST(ecp_io, test_io_channel_out_of_range)
 {
-	ECP_KNOWN_DEVIATION("IO commands pass out of range channels to the port driver");
-
 	const uint8_t ch = ECP_TEST_NUM_CHANNELS;
 	struct ecp_request_io_read read_q = {.ch = ch};
 	struct ecp_request_io_write write_q = {.ch = ch};
@@ -351,6 +349,27 @@ ZTEST(ecp_io, test_io_channel_out_of_range)
 			&resp);
 	ecp_test_expect(ECP_CMD_IO_CLEAR_FAULT, 1, &clear_q, sizeof(clear_q),
 			ECP_RES_INVALID_PARAM, &resp);
+
+	/* Nothing reached the port driver */
+	zassert_equal(port_fake_get_attribute_fake.call_count, 0);
+	zassert_equal(port_fake_set_value_fake.call_count, 0);
+	zassert_equal(port_fake_set_attribute_fake.call_count, 0);
+	zassert_equal(port_fake_pause_fake.call_count, 0);
+	zassert_equal(port_fake_resume_fake.call_count, 0);
+	zassert_equal(port_fake_clear_fault_fake.call_count, 0);
+}
+
+/* An invalid channel in the mask means no channel is paused or resumed */
+ZTEST(ecp_io, test_io_pause_partly_out_of_range)
+{
+	struct ecp_request_io_pause q = {
+		.pause = BIT(PORT_CH_A),
+		.ch_mask = BIT(PORT_CH_A) | BIT(ECP_TEST_NUM_CHANNELS),
+	};
+
+	ecp_test_expect(ECP_CMD_IO_PAUSE, 1, &q, sizeof(q), ECP_RES_INVALID_PARAM, &resp);
+	zassert_equal(port_fake_pause_fake.call_count, 0);
+	zassert_false(paused[PORT_CH_A]);
 }
 
 ZTEST_SUITE(ecp_io, ecp_phase_active, NULL, io_before, NULL, NULL);

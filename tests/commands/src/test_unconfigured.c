@@ -57,8 +57,6 @@ ZTEST(ecp_unconfigured, test_io_before_enum_fails)
 
 ZTEST(ecp_unconfigured, test_io_before_enum_not_allowed)
 {
-	ECP_KNOWN_DEVIATION("IO commands before ENUM return varying errors, not NOT_ALLOWED");
-
 	ARRAY_FOR_EACH_PTR(io_requests, q) {
 		ecp_test_expect(q->command, q->version, q->data, q->data_len, ECP_RES_NOT_ALLOWED,
 				&resp);
