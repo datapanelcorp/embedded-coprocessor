@@ -1,0 +1,10 @@
+common:
+  platform_allow:
+    - native_sim
+  toolchain_allow: llvm
+  tags: ecp_device_cmd fuzz
+
+tests:
+  # Fuzzing runs until stopped, so twister only builds it. See README.md to run it.
+  ecp.app.fuzz:
+    build_only: true

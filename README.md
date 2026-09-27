@@ -57,6 +57,28 @@ To run only this application's tests:
 - `tests/host` runs the ECP host driver, as used by the main MCU, against this
   application over a pair of emulated UARTs. It can corrupt bytes on the "wire" to test
   error recovery.
+- `tests/fuzz` is a libFuzzer target for the device command handler and this
+  application's commands. See below.
+
+### Fuzzing
+
+The fuzz target sends random sequences of requests to the ECP, and reports a crash if
+the ECP fails to respond with a correctly framed response, or if a sanitizer or
+assertion fails. It needs clang. From the top-level zephyr project directory:
+
+```
+ZEPHYR_TOOLCHAIN_VARIANT=llvm west build -b native_sim -d build-fuzz apps/embedded-coprocessor/tests/fuzz
+python3 apps/embedded-coprocessor/tests/fuzz/make_seeds.py fuzz-seeds
+mkdir -p fuzz-corpus
+build-fuzz/zephyr/zephyr.exe -max_total_time=300 -dict=apps/embedded-coprocessor/tests/fuzz/ecp.dict fuzz-corpus fuzz-seeds
+```
+
+libFuzzer adds interesting inputs to `fuzz-corpus`, so later runs continue from where
+earlier ones left off. When it finds a crash, it saves the input as `crash-<hash>`; run
+`build-fuzz/zephyr/zephyr.exe crash-<hash>` to reproduce it.
+
+PEEK and POKE are disabled in the fuzz target, because on `native_sim` they accept any
+address. ENUM, REBOOT and BOOT_JUMP are sent only once, at startup, or not at all.
 
 ### Known deviations from the specification
 
