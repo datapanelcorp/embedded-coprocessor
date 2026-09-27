@@ -83,11 +83,12 @@ ZTEST(ecp_unconfigured, test_enum_invalid_type_or_revision)
 	zassert_false(device_is_ready(DEVICE_DT_GET(DT_NODELABEL(port1_13a))));
 }
 
-ZTEST(ecp_unconfigured, test_enum_request_truncated)
+/* A complete request with less data than the command needs */
+ZTEST(ecp_unconfigured, test_enum_request_too_small)
 {
 	struct ecp_request_enum q = {.ecp_type = ECP_TEST_ENUM_TYPE, .ecp_revision = 2};
 
-	ecp_test_expect(ECP_CMD_ENUM, 1, &q, sizeof(q) - 1, ECP_RES_REQUEST_TRUNCATED, &resp);
+	ecp_test_expect(ECP_CMD_ENUM, 1, &q, sizeof(q) - 1, ECP_RES_INVALID_PARAM, &resp);
 	zassert_false(device_is_ready(ECP_TEST_PORT));
 }
 

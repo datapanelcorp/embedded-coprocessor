@@ -224,7 +224,7 @@ ZTEST(ecp_io, test_io_write)
 	port_fake_set_value_fake.return_val = -EINVAL;
 	ecp_test_expect(ECP_CMD_IO_WRITE, 1, &q, sizeof(q), ECP_RES_ERROR, &resp);
 
-	ecp_test_expect(ECP_CMD_IO_WRITE, 1, &q, sizeof(q) - 1, ECP_RES_REQUEST_TRUNCATED, &resp);
+	ecp_test_expect(ECP_CMD_IO_WRITE, 1, &q, sizeof(q) - 1, ECP_RES_INVALID_PARAM, &resp);
 }
 
 ZTEST(ecp_io, test_io_get_attrib)

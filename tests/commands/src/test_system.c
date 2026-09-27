@@ -85,11 +85,12 @@ ZTEST(ecp_system, test_ident)
 			  sizeof(CONFIG_APP_ECP_SW_PART_NUMBER));
 }
 
-ZTEST(ecp_system, test_ident_request_truncated)
+/* A complete request with less data than the command needs */
+ZTEST(ecp_system, test_ident_request_too_small)
 {
 	struct ecp_request_ident q = {0};
 
-	ecp_test_expect(ECP_CMD_IDENT, 1, &q, sizeof(q) - 1, ECP_RES_REQUEST_TRUNCATED, &resp);
+	ecp_test_expect(ECP_CMD_IDENT, 1, &q, sizeof(q) - 1, ECP_RES_INVALID_PARAM, &resp);
 }
 
 ZTEST(ecp_system, test_hello)
@@ -102,11 +103,12 @@ ZTEST(ecp_system, test_hello)
 	zassert_equal(sys_get_le32(resp.data), 0xFFFFFFF0 + 0x01020304);
 }
 
-ZTEST(ecp_system, test_hello_request_truncated)
+/* A complete request with less data than the command needs */
+ZTEST(ecp_system, test_hello_request_too_small)
 {
 	struct ecp_request_hello q = {0};
 
-	ecp_test_expect(ECP_CMD_HELLO, 1, &q, sizeof(q) - 1, ECP_RES_REQUEST_TRUNCATED, &resp);
+	ecp_test_expect(ECP_CMD_HELLO, 1, &q, sizeof(q) - 1, ECP_RES_INVALID_PARAM, &resp);
 }
 
 ZTEST(ecp_system, test_echo)
