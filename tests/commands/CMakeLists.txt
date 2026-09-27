@@ -20,6 +20,9 @@ target_sources(app PRIVATE
   src/test_estop.c
 )
 target_sources_ifdef(CONFIG_APP_ECP_GPIO app PRIVATE src/test_gpio.c)
+if(CONFIG_APP_ECP_HOST_TIMEOUT_MS GREATER 0)
+  target_sources(app PRIVATE src/test_inactivity.c)
+endif()
 target_sources_ifdef(CONFIG_APP_ECP_PEEK_POKE app PRIVATE src/test_peek_poke.c)
 target_sources_ifdef(CONFIG_APP_ECP_LED app PRIVATE src/test_led.c)
 

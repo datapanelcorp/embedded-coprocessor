@@ -27,8 +27,19 @@ static int pause(const struct device *dev, enum port_channel_id ch)
 	return 0;
 }
 
+/* Whether the channel's output was set to off before it was resumed */
+static bool off_before_resume[ECP_TEST_NUM_CHANNELS];
+
 static int resume(const struct device *dev, enum port_channel_id ch)
 {
+	unsigned int n = MIN(port_fake_set_value_fake.call_count, FFF_ARG_HISTORY_LEN);
+
+	for (unsigned int i = 0; i < n; i++) {
+		if (port_fake_set_value_fake.arg1_history[i] == ch &&
+		    port_fake_set_value_fake.arg2_history[i] == 0) {
+			off_before_resume[ch] = true;
+		}
+	}
 	paused[ch] = false;
 	return 0;
 }
@@ -107,7 +118,10 @@ ZTEST(ecp_estop, test_3_enum_other_type)
 	expect_io(ECP_RES_NOT_ALLOWED);
 }
 
-/* Enumerating again restores the channels as they were before ESTOP */
+/* Enumerating again leaves every output and sensor power off until the host commands them
+ * (SRS-352, SRS-354). Channels the host had paused stay paused; the others are resumed,
+ * but only after their output is set to off.
+ */
 ZTEST(ecp_estop, test_4_enum_again)
 {
 	struct ecp_request_enum q = {.ecp_type = ECP_TEST_ENUM_TYPE, .ecp_revision = 2};
@@ -115,14 +129,15 @@ ZTEST(ecp_estop, test_4_enum_again)
 	ecp_test_expect(ECP_CMD_ENUM, 1, &q, sizeof(q), ECP_RES_SUCCESS, &resp);
 
 	zassert_false(paused[PORT_CH_A], "Channel A not resumed");
+	zassert_true(off_before_resume[PORT_CH_A], "Channel A resumed before its output was off");
 	zassert_true(paused[PORT_CH_B], "Channel B was paused before ESTOP, but was resumed");
-	zassert_equal(sensor_power[PORT_CH_A], 1);
-	zassert_equal(sensor_power[PORT_CH_B], 2);
+	zassert_equal(sensor_power[PORT_CH_A], 0, "Channel A sensor power back on");
+	zassert_equal(sensor_power[PORT_CH_B], 0, "Channel B sensor power back on");
 
 	expect_io(ECP_RES_SUCCESS);
 
-	/* Active again */
-	ecp_test_expect(ECP_CMD_ENUM, 1, &q, sizeof(q), ECP_RES_NOT_ALLOWED, &resp);
+	/* Active again, and ENUM is still accepted */
+	ecp_test_expect(ECP_CMD_ENUM, 1, &q, sizeof(q), ECP_RES_SUCCESS, &resp);
 }
 
 ZTEST_SUITE(ecp_estop, ecp_phase_estop, NULL, estop_before, NULL, NULL);
