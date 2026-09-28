@@ -1,0 +1,52 @@
+/*
+ * Stand-ins for the ECP hardware, so the application can run on native_sim.
+ * Node labels match datapanel_45116_stm32g051xx.dts.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+    leds {
+        compatible = "gpio-leds";
+        led_r_a: led-r-a {
+            gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
+        };
+        led_g_a: led-g-a {
+            gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+        };
+        led_b_a: led-b-a {
+            gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+        };
+        led_r_b: led-r-b {
+            gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+        };
+        led_g_b: led-g-b {
+            gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+        };
+        led_b_b: led-b-b {
+            gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+        };
+    };
+
+    port: ports {
+        compatible = "dp,port-controller";
+        status = "okay";
+        #address-cells = <1>;
+        #size-cells = <0>;
+        zephyr,deferred-init;
+
+        port1_5a: port1_5a@1 {
+            compatible = "dp,port-fake";
+            reg = <1>;
+            status = "okay";
+            zephyr,deferred-init;
+        };
+
+        port1_13a: port1_13a@1 {
+            compatible = "dp,port-fake";
+            reg = <1>;
+            status = "okay";
+            zephyr,deferred-init;
+        };
+    };
+};

@@ -1,0 +1,10 @@
+config ECP_FUZZ_IRQ
+	int "Interrupt used to deliver fuzz inputs"
+	default 31
+
+config ECP_FUZZ_MAX_FRAMES
+	int "Maximum number of frames in one fuzz input"
+	default 16
+
+# The application's options (APP_ECP_*), which also sources Kconfig.zephyr
+rsource "../../Kconfig"

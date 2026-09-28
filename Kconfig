@@ -9,6 +9,14 @@ config APP_ECP_IO
     help
         Enable support for accessing ports via ECP.
 
+config APP_ECP_HOST_TIMEOUT_MS
+    int "Host inactivity timeout (ms)"
+    default 100
+    help
+        While active, if no valid request arrives from the host for this long, switch
+        off the output and sensor power of every channel (SRS-354). They stay off until
+        the host commands them again. 0 disables the timeout.
+
 config APP_ECP_PEEK_POKE
     bool "Enable support for peek/poke"
     default y

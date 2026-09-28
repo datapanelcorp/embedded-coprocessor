@@ -24,8 +24,13 @@ static enum ecp_result_code ecp_device_cmd_proto(struct ecp_device_cmd_handler_a
 {
 	struct ecp_response_proto_version *r = (void *)args->rdata;
 	r->versions = BIT(ECP_PROTO_VERSION);
-	r->max_request_packet_size = CONFIG_ECP_DEVICE_CMD_HANDLER_RX_BUFFER_SIZE;
-	r->max_response_packet_size = CONFIG_ECP_DEVICE_CMD_HANDLER_TX_BUFFER_SIZE;
+	/* Limited by the buffers, and by the largest payload the header can describe */
+	r->max_request_packet_size =
+		MIN(CONFIG_ECP_DEVICE_CMD_HANDLER_RX_BUFFER_SIZE,
+		    ECP_REQUEST_HEADER_SIZE + ECP_MAX_PAYLOAD_BYTES + ECP_DATA_CRC_SIZE);
+	r->max_response_packet_size =
+		MIN(CONFIG_ECP_DEVICE_CMD_HANDLER_TX_BUFFER_SIZE,
+		    ECP_RESPONSE_HEADER_SIZE + ECP_MAX_PAYLOAD_BYTES + ECP_DATA_CRC_SIZE);
 	r->flags = 0;
 #if defined(CONFIG_ECP_DEVICE_CMD_IN_PROGRESS_STATUS)
 	r->flags |= ECP_PROTOCOL_INFO_IN_PROGRESS_SUPPORTED;
@@ -72,13 +77,162 @@ static void port_handler_thread(void *p1, void *p2, void *p3)
 	return ports_task(pidata, nports);
 }
 
+/* The ECP is unconfigured until ENUM succeeds, and then active (ECP protocol specification,
+ * "Network layer"). Some commands are only available in one of the states.
+ */
+static bool ecp_active;
+
+/* The port set up by the first successful ENUM. Later ENUMs must match it. */
+static bool ports_configured;
+static uint8_t configured_type;
+static uint8_t configured_revision;
+
+/* Whether the host had paused each channel before the safe state. The next ENUM keeps
+ * those channels paused.
+ */
+static bool saved_paused[CONFIG_DP_PORTS_MAX_NUM_CHANNELS];
+
+/* Held while changing channel outputs, so the host inactivity timeout can't switch off an
+ * output the host has just commanded
+ */
+static K_MUTEX_DEFINE(io_lock);
+
+static void host_timeout_stop(void);
+static void host_timeout_kick(void);
+
+/* Return all I/O to a safe state, and enter the unconfigured state (ECP protocol
+ * specification, ECP_CMD_ESTOP). Every channel is paused, which turns its output off, and
+ * its sensor power is turned off.
+ */
+static int enter_safe_state(void)
+{
+	bool was_active = ecp_active;
+	int ret = 0;
+
+	ecp_active = false;
+	host_timeout_stop();
+	if (!ports_configured) {
+		return 0;
+	}
+
+	k_mutex_lock(&io_lock, K_FOREVER);
+	int nchannels = port_channel_count(PORT_1);
+	for (enum port_channel_id ch = PORT_CH_A; ch < nchannels; ch++) {
+		/* Keep the state from before the first ESTOP, if there's more than one */
+		if (was_active) {
+			saved_paused[ch] = port_channel_paused(PORT_1, ch) == 1;
+		}
+
+		int err = port_channel_pause(PORT_1, ch);
+		if (err != 0 && err != -ENOTSUP) {
+			ret = err;
+		}
+		err = port_channel_set_sensor_power(PORT_1, ch, 0);
+		if (err != 0 && err != -ENOTSUP) {
+			ret = err;
+		}
+	}
+	k_mutex_unlock(&io_lock);
+	return ret;
+}
+
+/* Switch off every channel's output and sensor power, without pausing: the host's next
+ * command applies as usual (SRS-352, SRS-354). Input channels don't take a value, so their
+ * errors are ignored.
+ */
+static void outputs_off(void)
+{
+	int nchannels = port_channel_count(PORT_1);
+
+	for (enum port_channel_id ch = PORT_CH_A; ch < nchannels; ch++) {
+		(void)port_channel_write(PORT_1, ch, 0);
+		(void)port_channel_set_sensor_power(PORT_1, ch, 0);
+	}
+}
+
+/* Leave the safe state after ENUM. Outputs and sensor power stay off until the host
+ * commands them again. Channels the host had paused stay paused; the others are resumed
+ * after their output is set to off, so they never drive the value from before the safe
+ * state.
+ */
+static void leave_safe_state(void)
+{
+	int nchannels = port_channel_count(PORT_1);
+
+	k_mutex_lock(&io_lock, K_FOREVER);
+	outputs_off();
+	for (enum port_channel_id ch = PORT_CH_A; ch < nchannels; ch++) {
+		if (!saved_paused[ch]) {
+			port_channel_resume(PORT_1, ch);
+		}
+	}
+	k_mutex_unlock(&io_lock);
+	ecp_active = true;
+}
+
+#if CONFIG_APP_ECP_HOST_TIMEOUT_MS > 0
+/* Host inactivity timeout (SRS-354): if no valid request arrives for
+ * CONFIG_APP_ECP_HOST_TIMEOUT_MS while active, switch off every output and sensor power.
+ */
+static atomic_t last_rx_ms;
+
+static void host_timeout_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	k_mutex_lock(&io_lock, K_FOREVER);
+	/* A request that arrived while waiting for the lock resets the timer instead */
+	uint32_t silent_ms = k_uptime_get_32() - (uint32_t)atomic_get(&last_rx_ms);
+
+	if (ecp_active && silent_ms >= CONFIG_APP_ECP_HOST_TIMEOUT_MS) {
+		LOG_WRN("No request from host for %u ms: outputs off", silent_ms);
+		outputs_off();
+	}
+	k_mutex_unlock(&io_lock);
+}
+static K_WORK_DELAYABLE_DEFINE(host_timeout_work, host_timeout_handler);
+
+static void host_timeout_kick(void)
+{
+	atomic_set(&last_rx_ms, (atomic_val_t)k_uptime_get_32());
+	if (ecp_active) {
+		k_work_reschedule(&host_timeout_work, K_MSEC(CONFIG_APP_ECP_HOST_TIMEOUT_MS));
+	}
+}
+
+static void host_timeout_stop(void)
+{
+	k_work_cancel_delayable(&host_timeout_work);
+}
+
+/* Called for every request that passes the frame checks, possibly from an ISR */
+static void host_rx_cb(const struct ecp_device_cmd_request_ctx *qctx, void *user_data)
+{
+	ARG_UNUSED(qctx);
+	ARG_UNUSED(user_data);
+	host_timeout_kick();
+}
+#else
+static void host_timeout_kick(void)
+{
+}
+
+static void host_timeout_stop(void)
+{
+}
+#endif
+
 static struct k_thread port_thread;
 #define PORT_HANDLER_STACK_SIZE 1024
 #define PORT_HANDLER_PRIORITY   4
 static K_KERNEL_STACK_DEFINE(port_handler_stack, PORT_HANDLER_STACK_SIZE);
 static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_revision)
 {
-	struct port_init_data pidata = {
+	/* The port handler thread keeps using these */
+	static struct port_init_data pidata;
+	static int nports = 1;
+
+	pidata = (struct port_init_data){
 		.port = 1,
 		.dev = NULL,
 	};
@@ -113,8 +267,6 @@ static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_r
 		LOG_ERR("Could not initialize PORT_%c: %d", '1' + pidata.port, ret);
 	}
 
-	int nports = 1;
-
 	k_thread_create(&port_thread, port_handler_stack, PORT_HANDLER_STACK_SIZE,
 			port_handler_thread, (void *)&pidata, (void *)&nports, NULL,
 			PORT_HANDLER_PRIORITY, K_ESSENTIAL, K_NO_WAIT);
@@ -128,6 +280,25 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 	const struct ecp_request_enum *q = (void *)args->qdata;
 	LOG_INF("enumerating... offset=%d type=%d rev=%d", q->offset, q->ecp_type, q->ecp_revision);
 
+#if CONFIG_APP_ECP_HOST_TIMEOUT_MS > 0
+	ecp_device_cmd_set_user_cb(host_rx_cb, NULL);
+#endif
+
+	/* Enumerated again: after ESTOP, or by a host that restarted while the ECP kept
+	 * running (ENUM is available in both states). The ports are already set up, and
+	 * can't change.
+	 */
+	if (ports_configured) {
+		if (q->ecp_type != configured_type || q->ecp_revision != configured_revision) {
+			return ECP_RES_INVALID_PARAM;
+		}
+		if (!ecp_active) {
+			leave_safe_state();
+		}
+		host_timeout_kick();
+		return ECP_RES_SUCCESS;
+	}
+
 	int ret = config_activate(q->offset, q->ecp_type, q->ecp_revision);
 
 	args->rdata_len = 0;
@@ -137,6 +308,11 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 	case -ENOTSUP:
 		return ECP_RES_INVALID_PARAM;
 	case 0:
+		ports_configured = true;
+		configured_type = q->ecp_type;
+		configured_revision = q->ecp_revision;
+		ecp_active = true;
+		host_timeout_kick();
 		return ECP_RES_SUCCESS;
 	default:
 		return ECP_RES_ERROR;
@@ -185,9 +361,13 @@ static enum ecp_result_code ecp_device_cmd_reboot(struct ecp_device_cmd_handler_
 	}
 	args->rdata_len = 0;
 
-	ecp_device_cmd_send_in_progress_continue(reboot_continue, NULL);
+	/* Everything ESTOP does, before restarting */
+	enter_safe_state();
 
-	return ECP_RES_IN_PROGRESS;
+	/* BUSY if another long-running command hasn't finished */
+	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(reboot_continue, NULL);
+
+	return (result == ECP_RES_SUCCESS) ? ECP_RES_IN_PROGRESS : result;
 }
 ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_REBOOT, ecp_device_cmd_reboot, BIT(1));
 
@@ -207,10 +387,11 @@ static enum ecp_result_code ecp_device_cmd_features(struct ecp_device_cmd_handle
 ECP_DEVICE_CMD_HANDLER_RESP_ONLY(ECP_CMD_FEATURES, ecp_device_cmd_features, BIT(1),
 				 struct ecp_response_features);
 
+static enum ecp_result_code estop_result;
+
 static enum ecp_result_code estop_continue(void *user_data)
 {
-	// TODO: get to a safe state
-	return ECP_RES_SUCCESS;
+	return estop_result;
 }
 
 static enum ecp_result_code ecp_device_cmd_estop(struct ecp_device_cmd_handler_args *args)
@@ -220,9 +401,15 @@ static enum ecp_result_code ecp_device_cmd_estop(struct ecp_device_cmd_handler_a
 	}
 	args->rdata_len = 0;
 
-	ecp_device_cmd_send_in_progress_continue(estop_continue, NULL);
+	/* Stop right away, even if another long-running command hasn't finished. The final
+	 * result reports whether every channel reached the safe state.
+	 */
+	estop_result = (enter_safe_state() == 0) ? ECP_RES_SUCCESS : ECP_RES_ERROR;
 
-	return ECP_RES_IN_PROGRESS;
+	/* BUSY if another long-running command hasn't finished */
+	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(estop_continue, NULL);
+
+	return (result == ECP_RES_SUCCESS) ? ECP_RES_IN_PROGRESS : result;
 }
 ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_ESTOP, ecp_device_cmd_estop, BIT(1));
 
@@ -240,13 +427,24 @@ static enum ecp_result_code ecp_device_cmd_boot_jump(struct ecp_device_cmd_handl
 	}
 	args->rdata_len = 0;
 
-	ecp_device_cmd_send_in_progress_continue(boot_jump_continue, NULL);
+	/* Everything ESTOP does, before restarting */
+	enter_safe_state();
 
-	return ECP_RES_IN_PROGRESS;
+	/* BUSY if another long-running command hasn't finished */
+	enum ecp_result_code result = ecp_device_cmd_send_in_progress_continue(boot_jump_continue, NULL);
+
+	return (result == ECP_RES_SUCCESS) ? ECP_RES_IN_PROGRESS : result;
 }
 ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_BOOT_JUMP, ecp_device_cmd_boot_jump, BIT(1));
 
 #if defined(CONFIG_APP_ECP_IO)
+
+static bool channel_valid(uint8_t ch)
+{
+	int nchannels = port_channel_count(PORT_1);
+
+	return nchannels > 0 && ch < nchannels;
+}
 
 static int prepare_io_read_response(struct ecp_response_io_read *r, enum port_channel_id ch)
 {
@@ -260,19 +458,20 @@ static int prepare_io_read_response(struct ecp_response_io_read *r, enum port_ch
 		return ret;
 	}
 
+	/* Values the port can't provide are reported as -1 (ECP protocol specification) */
 	uint32_t raw = -1UL;
 	port_channel_get_raw_value(PORT_1, ch, &raw);
 
-	int scaled = INT_MIN;
+	int scaled = -1;
 	port_channel_get_value(PORT_1, ch, &scaled);
 
-	int voltage = INT_MIN;
+	int voltage = -1;
 	port_channel_get_analog_value(PORT_1, ch, &voltage);
 
-	int current = INT_MIN;
+	int current = -1;
 	port_channel_get_current(PORT_1, ch, &current);
 
-	int temperature = INT_MIN;
+	int temperature = -1;
 	port_channel_get_temperature(PORT_1, ch, &temperature);
 
 	enum port_channel_fault_status fault_status = PORT_CH_FAULT_OTHER;
@@ -312,6 +511,9 @@ static enum ecp_result_code ecp_device_cmd_io_read_single(struct ecp_device_cmd_
 		return ECP_RES_INVALID_PARAM;
 	}
 	const struct ecp_request_io_read *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 	enum port_channel_id ch = (enum port_channel_id)q->ch;
 	struct ecp_response_io_read *r = (void *)args->rdata;
 
@@ -349,6 +551,10 @@ static enum ecp_result_code ecp_device_cmd_io_read_all(struct ecp_device_cmd_han
 
 static enum ecp_result_code ecp_device_cmd_io_read(struct ecp_device_cmd_handler_args *args)
 {
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
+
 	switch (args->version) {
 	case 2:
 		return ecp_device_cmd_io_read_single(args);
@@ -362,9 +568,17 @@ ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_IO_READ, ecp_device_cmd_io_read, BIT(2) |
 
 static enum ecp_result_code ecp_device_cmd_io_write(struct ecp_device_cmd_handler_args *args)
 {
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_write *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
+	k_mutex_lock(&io_lock, K_FOREVER);
 	int ret = port_channel_write(PORT_1, q->ch, q->value);
+	k_mutex_unlock(&io_lock);
 
 	return (ret == 0) ? ECP_RES_SUCCESS : ECP_RES_ERROR;
 }
@@ -373,7 +587,13 @@ ECP_DEVICE_CMD_HANDLER_REQ_ONLY(ECP_CMD_IO_WRITE, ecp_device_cmd_io_write, BIT(1
 
 enum ecp_result_code ecp_device_cmd_io_get_attrib(struct ecp_device_cmd_handler_args *args)
 {
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_get_attrib *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 	struct ecp_response_io_get_attrib *r = (void *)args->rdata;
 
 	uintptr_t value;
@@ -400,11 +620,19 @@ ECP_DEVICE_CMD_HANDLER(ECP_CMD_IO_GET_ATTRIB, ecp_device_cmd_io_get_attrib, BIT(
 static enum ecp_result_code ecp_device_cmd_io_set_attrib(struct ecp_device_cmd_handler_args *args)
 {
 	args->rdata_len = 0;
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_set_attrib *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
 	uintptr_t value = (uintptr_t)q->value;
+	k_mutex_lock(&io_lock, K_FOREVER);
 	int ret = port_channel_set_attribute(PORT_1, (enum port_channel_id)q->ch,
 					     (enum port_channel_attribute_id)q->attrib_id, value);
+	k_mutex_unlock(&io_lock);
 	switch (ret) {
 	case 0:
 		return ECP_RES_SUCCESS;
@@ -424,6 +652,15 @@ static enum ecp_result_code ecp_device_cmd_io_pause(struct ecp_device_cmd_handle
 {
 	const struct ecp_request_io_pause *q = (void *)args->qdata;
 	args->rdata_len = 0;
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
+
+	/* Check every channel before pausing or resuming any of them */
+	int nchannels = port_channel_count(PORT_1);
+	if (nchannels <= 0 || (q->ch_mask & ~BIT_MASK(nchannels)) != 0) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
 	// For each bit in the mask, pause or resume the corresponding channel
 	uint32_t mask = q->ch_mask;
@@ -432,9 +669,9 @@ static enum ecp_result_code ecp_device_cmd_io_pause(struct ecp_device_cmd_handle
 		enum port_channel_id ch = index;
 
 		bool pause = q->pause & BIT(index);
+		int ret = pause ? port_channel_pause(PORT_1, ch) : port_channel_resume(PORT_1, ch);
 
-		if ((pause && port_channel_pause(PORT_1, ch) != 0) ||
-		    (port_channel_resume(PORT_1, ch) != 0)) {
+		if (ret != 0) {
 			return ECP_RES_INVALID_PARAM;
 		}
 
@@ -446,7 +683,7 @@ static enum ecp_result_code ecp_device_cmd_io_pause(struct ecp_device_cmd_handle
 	args->rdata_len = sizeof(*r);
 	r->paused = 0;
 
-	for (enum port_channel_id ch = PORT_CH_A; ch < port_channel_count(PORT_1); ch++) {
+	for (enum port_channel_id ch = PORT_CH_A; ch < nchannels; ch++) {
 		if (port_channel_paused(PORT_1, ch) == 1) {
 			r->paused |= BIT(ch);
 		}
@@ -460,7 +697,13 @@ ECP_DEVICE_CMD_HANDLER(ECP_CMD_IO_PAUSE, ecp_device_cmd_io_pause, BIT(1),
 static enum ecp_result_code ecp_device_cmd_io_clear_fault(struct ecp_device_cmd_handler_args *args)
 {
 	args->rdata_len = 0;
+	if (!ecp_active) {
+		return ECP_RES_NOT_ALLOWED;
+	}
 	const struct ecp_request_io_clear_fault *q = (void *)args->qdata;
+	if (!channel_valid(q->ch)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 
 	enum port_channel_id ch = (enum port_channel_id)q->ch;
 	if (port_channel_clear_fault(PORT_1, ch) != 0) {
@@ -546,7 +789,7 @@ static enum ecp_result_code ecp_device_cmd_led_brightness(struct ecp_device_cmd_
 		return ECP_RES_INVALID_PARAM;
 	}
 	// Otherwise, set a single LED
-	const struct device *led = &supported_leds[q->led];
+	const struct ecp_led *led = &supported_leds[q->led];
 	int ret = led_set_brightness(led->dev, led->index, q->brightness);
 
 	return (ret == 0) ? ECP_RES_SUCCESS : ECP_RES_ERROR;

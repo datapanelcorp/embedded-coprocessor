@@ -1,0 +1,20 @@
+common:
+  platform_allow:
+    - native_sim
+  integration_platforms:
+    - native_sim
+  tags: ecp_device_cmd
+
+tests:
+  ecp.app.commands: {}
+  ecp.app.commands.13a:
+    extra_configs:
+      - CONFIG_TEST_ECP_ENUM_13A=y
+  ecp.app.commands.led:
+    extra_configs:
+      - CONFIG_LED=y
+  ecp.app.commands.minimal:
+    extra_configs:
+      - CONFIG_APP_ECP_PEEK_POKE=n
+      - CONFIG_APP_ECP_GPIO=n
+      - CONFIG_APP_ECP_COMM_STATS=n

@@ -1,0 +1,22 @@
+common:
+  platform_allow:
+    - native_sim
+  integration_platforms:
+    - native_sim
+  tags: ecp_device_cmd
+
+tests:
+  ecp.app.reboot:
+    extra_configs:
+      - CONFIG_TEST_ECP_REBOOT_COMMAND=0x0005
+  ecp.app.boot_jump:
+    extra_configs:
+      - CONFIG_TEST_ECP_REBOOT_COMMAND=0x0009
+  ecp.app.reboot.active:
+    extra_configs:
+      - CONFIG_TEST_ECP_REBOOT_COMMAND=0x0005
+      - CONFIG_TEST_ECP_REBOOT_WHEN_ACTIVE=y
+  ecp.app.boot_jump.active:
+    extra_configs:
+      - CONFIG_TEST_ECP_REBOOT_COMMAND=0x0009
+      - CONFIG_TEST_ECP_REBOOT_WHEN_ACTIVE=y

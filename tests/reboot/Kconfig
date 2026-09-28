@@ -1,0 +1,12 @@
+config TEST_ECP_REBOOT_COMMAND
+	hex "Command to test"
+	default 0x0005
+	help
+	  ECP_CMD_REBOOT (0x0005) or ECP_CMD_BOOT_JUMP (0x0009)
+
+config TEST_ECP_REBOOT_WHEN_ACTIVE
+	bool "Enumerate before rebooting"
+	help
+	  Send ENUM first, so the command is tested in the active state.
+
+rsource "../commands/Kconfig"
