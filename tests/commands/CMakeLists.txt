@@ -20,6 +20,7 @@ target_sources(app PRIVATE
   src/test_estop.c
 )
 target_sources_ifdef(CONFIG_APP_ECP_GPIO app PRIVATE src/test_gpio.c)
+target_sources_ifdef(CONFIG_TASK_WDT app PRIVATE ${APP_DIR}/src/watchdog.c src/test_watchdog.c)
 if(CONFIG_APP_ECP_HOST_TIMEOUT_MS GREATER 0)
   target_sources(app PRIVATE src/test_inactivity.c)
 endif()
