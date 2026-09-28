@@ -40,6 +40,8 @@
             reg = <1>;
             status = "okay";
             zephyr,deferred-init;
+            /* As on the board: PWM frequency, digital input thresholds low and high */
+            shared-attributes = <1 21 22>;
         };
 
         port1_13a: port1_13a@1 {

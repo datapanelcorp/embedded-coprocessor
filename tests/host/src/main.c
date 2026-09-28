@@ -126,6 +126,7 @@ ZTEST(ecp_host, test_2_enum_and_io)
 	struct ecp_request_enum q_enum = {.ecp_type = ECP_TYPE_DO_DI_5A, .ecp_revision = 2};
 
 	zassert_ok(command(ECP_CMD_ENUM, 1, &q_enum, sizeof(q_enum)));
+	zassert_equal(resp_len, 0, "ENUM v1 has no response data");
 	zassert_true(device_is_ready(PORT));
 
 	struct ecp_request_io_write q = {.ch = PORT_CH_B, .value = 7500};
@@ -137,6 +138,26 @@ ZTEST(ecp_host, test_2_enum_and_io)
 
 	port_fake_set_value_fake.return_val = -EIO;
 	zassert_equal(command(ECP_CMD_IO_WRITE, 1, &q, sizeof(q)), -EIO);
+}
+
+/* ENUM version 2 reports the layout of the port the ECP set up: its channel count and the
+ * attributes its channels share. ENUM again, with the same type and revision, is allowed.
+ */
+ZTEST(ecp_host, test_2_enum_v2_reports_layout)
+{
+	struct ecp_request_enum q_enum = {.ecp_type = ECP_TYPE_DO_DI_5A, .ecp_revision = 2};
+	const struct ecp_response_enum_v2 *r = (const void *)resp;
+
+	zassert_ok(command(ECP_CMD_ENUM, 2, &q_enum, sizeof(q_enum)));
+	zassert_equal(resp_len, sizeof(*r) + 3, "response length %u", (unsigned int)resp_len);
+	zassert_equal(r->nchannels, 2);
+	zassert_equal(r->nshared, 3);
+	zassert_equal(r->shared[0], PORT_CH_ATTRIB_PWM_FREQ);
+	zassert_equal(r->shared[1], PORT_CH_ATTRIB_DIGIN_ANALOG_THRESHOLD_LOW);
+	zassert_equal(r->shared[2], PORT_CH_ATTRIB_DIGIN_ANALOG_THRESHOLD_HIGH);
+
+	/* A version the ECP doesn't have; the main MCU falls back to version 1 on this */
+	zassert_equal(command(ECP_CMD_ENUM, 3, &q_enum, sizeof(q_enum)), -EPROTO);
 }
 
 /* The ECP can't tell how long a request with a corrupted header is, so it drops it

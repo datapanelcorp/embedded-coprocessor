@@ -226,6 +226,15 @@ static struct k_thread port_thread;
 #define PORT_HANDLER_STACK_SIZE 1024
 #define PORT_HANDLER_PRIORITY   4
 static K_KERNEL_STACK_DEFINE(port_handler_stack, PORT_HANDLER_STACK_SIZE);
+/* Attributes each port's channels share (shared-attributes), reported by ENUM v2 */
+static const uint8_t shared_5a[] = DT_PROP_OR(DT_NODELABEL(port1_5a), shared_attributes, {});
+static const uint8_t shared_13a[] = DT_PROP_OR(DT_NODELABEL(port1_13a), shared_attributes, {});
+
+/* The port set up by ENUM, and what its channels share */
+static const struct device *configured_port;
+static const uint8_t *configured_shared;
+static size_t configured_nshared;
+
 static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_revision)
 {
 	/* The port handler thread keeps using these */
@@ -241,11 +250,15 @@ static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_r
 	case ECP_TYPE_DO_DI_5A:
 		if (ecp_revision == 2) {
 			pidata.dev = DEVICE_DT_GET(DT_NODELABEL(port1_5a));
+			configured_shared = shared_5a;
+			configured_nshared = ARRAY_SIZE(shared_5a);
 		}
 		break;
 	case ECP_TYPE_DO_DI_13A:
 		if (ecp_revision == 2) {
 			pidata.dev = DEVICE_DT_GET(DT_NODELABEL(port1_13a));
+			configured_shared = shared_13a;
+			configured_nshared = ARRAY_SIZE(shared_13a);
 		}
 		break;
 	default:
@@ -255,6 +268,7 @@ static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_r
 	if (pidata.dev == NULL) {
 		return -ENOTSUP;
 	}
+	configured_port = pidata.dev;
 
 	int ret = device_init(DEVICE_DT_GET(DT_NODELABEL(port)));
 	if (ret != 0) {
@@ -273,6 +287,30 @@ static int config_activate(uint8_t offset, enum ecp_type ecp_type, uint8_t ecp_r
 	k_thread_name_set(&port_thread, "ecp_port");
 
 	return 0;
+}
+
+/* ENUM response: none for version 1; the port's layout for version 2 */
+static enum ecp_result_code enum_response(struct ecp_device_cmd_handler_args *args)
+{
+	args->rdata_len = 0;
+	if (args->version < 2) {
+		return ECP_RES_SUCCESS;
+	}
+
+	struct ecp_response_enum_v2 *r = (void *)args->rdata;
+	size_t len = sizeof(*r) + configured_nshared;
+
+	if (len > args->rdata_max) {
+		return ECP_RES_RESPONSE_TOO_BIG;
+	}
+
+	const struct port_driver_data *pdata = configured_port->data;
+
+	r->nchannels = pdata->nchannels;
+	r->nshared = configured_nshared;
+	memcpy(r->shared, configured_shared, configured_nshared);
+	args->rdata_len = len;
+	return ECP_RES_SUCCESS;
 }
 
 static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_args *args)
@@ -296,7 +334,7 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 			leave_safe_state();
 		}
 		host_timeout_kick();
-		return ECP_RES_SUCCESS;
+		return enum_response(args);
 	}
 
 	int ret = config_activate(q->offset, q->ecp_type, q->ecp_revision);
@@ -313,12 +351,13 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 		configured_revision = q->ecp_revision;
 		ecp_active = true;
 		host_timeout_kick();
-		return ECP_RES_SUCCESS;
+		return enum_response(args);
 	default:
 		return ECP_RES_ERROR;
 	}
 }
-ECP_DEVICE_CMD_HANDLER_REQ_ONLY(ECP_CMD_ENUM, ecp_device_cmd_enum, BIT(1), struct ecp_request_enum);
+ECP_DEVICE_CMD_HANDLER_REQ_ONLY(ECP_CMD_ENUM, ecp_device_cmd_enum, BIT(1) | BIT(2),
+				struct ecp_request_enum);
 
 static enum ecp_result_code ecp_device_cmd_hello_v1(struct ecp_device_cmd_handler_args *args)
 {
