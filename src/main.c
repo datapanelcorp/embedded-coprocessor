@@ -1,6 +1,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/drivers/watchdog.h>
+#include <zephyr/task_wdt/task_wdt.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/pm/pm.h>
 
@@ -10,45 +10,20 @@
 
 LOG_MODULE_REGISTER(app, CONFIG_APP_LOG_LEVEL);
 
-#if defined(CONFIG_WATCHDOG) && DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay)
-#define WDT_MAX_WINDOW       CONFIG_IWDG_STM32_INITIAL_TIMEOUT
-#define WDT_MIN_WINDOW       0
-#define WDT_FEED_INTERVAL_MS 50
-
-static const struct device *wdt = DEVICE_DT_GET(DT_ALIAS(watchdog0));
-#endif
+#define MAIN_LOOP_INTERVAL_MS 50
+#define MAIN_WDT_TIMEOUT_MS   1000
 
 int main(void)
 {
-#if defined(CONFIG_WATCHDOG) && DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay)
-	if (!device_is_ready(wdt)) {
-		LOG_ERR("%s: device not ready", wdt->name);
-		return -ENODEV;
+	/* The task watchdog, and the hardware watchdog behind it, are started in watchdog.c.
+	 * The main loop feeds its own channel.
+	 */
+#if defined(CONFIG_TASK_WDT)
+	int wdt_channel = task_wdt_add(MAIN_WDT_TIMEOUT_MS, NULL, NULL);
+
+	if (wdt_channel < 0) {
+		LOG_ERR("Could not add task watchdog channel: %d", wdt_channel);
 	}
-
-	struct wdt_timeout_cfg wdt_config = {
-		.flags = WDT_FLAG_RESET_SOC,
-		.window.min = WDT_MIN_WINDOW,
-		.window.max = WDT_MAX_WINDOW,
-	};
-
-	int wdt_channel_id = wdt_install_timeout(wdt, &wdt_config);
-	if (wdt_channel_id < 0) {
-		LOG_ERR("Could not install watchdog timeout: %d", wdt_channel_id);
-		return wdt_channel_id;
-	}
-
-	int ret = wdt_setup(wdt, WDT_OPT_PAUSE_HALTED_BY_DBG);
-	if (ret < 0) {
-		LOG_ERR("Watchdog setup failed: %d", ret);
-		return ret;
-	}
-
-#if WDT_MIN_WINDOW != 0
-	k_msleep(WDT_MIN_WINDOW);
-#endif
-
-	wdt_feed(wdt, wdt_channel_id);
 #endif
 
 	printk("ECP %d.%d.%d+%d-%s\n", APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_PATCHLEVEL,
@@ -60,12 +35,12 @@ int main(void)
 			dp_metrics_collect();
 		}
 
-#if defined(CONFIG_WATCHDOG) && DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay)
-		wdt_feed(wdt, wdt_channel_id);
-		k_msleep(WDT_FEED_INTERVAL_MS);
-#else
-		k_msleep(100);
+#if defined(CONFIG_TASK_WDT)
+		if (wdt_channel >= 0) {
+			task_wdt_feed(wdt_channel);
+		}
 #endif
+		k_msleep(MAIN_LOOP_INTERVAL_MS);
 	}
 
 	return 0;

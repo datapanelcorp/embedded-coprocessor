@@ -13,6 +13,11 @@ tests:
   ecp.app.commands.led:
     extra_configs:
       - CONFIG_LED=y
+  ecp.app.commands.task_wdt:
+    extra_configs:
+      - CONFIG_TASK_WDT=y
+      - CONFIG_ECP_DEVICE_CMD_TASK_WDT_TIMEOUT_MS=200
+      - CONFIG_DP_PORTS_TASK_WDT_TIMEOUT_MS=200
   ecp.app.commands.minimal:
     extra_configs:
       - CONFIG_APP_ECP_PEEK_POKE=n
