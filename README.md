@@ -18,7 +18,18 @@ From the top-level zephyr project directory:
 
 `west build -p always -b datapanel_45116@A/stm32g051xx apps/embedded-coprocessor`
 
-This builds the coprocessor firmware.
+This builds the coprocessor firmware in its release configuration (`prj.conf`), which
+has logging disabled.
+
+For development, the debug overlay can be used to enable logging:
+
+```
+west build -p always -b datapanel_45116@A/stm32g051xx \ 
+  apps/embedded-coprocessor -- \
+  -DEXTRA_CONF_FILE=debug.conf
+```
+
+Debug-only options belong in `debug.conf`, not in `prj.conf`.
 
 TODO: describe how coprocessor firmware gets incorporated into the block's firmware update.
 
