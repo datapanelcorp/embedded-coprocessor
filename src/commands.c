@@ -320,9 +320,11 @@ static enum ecp_result_code ecp_device_cmd_enum(struct ecp_device_cmd_handler_ar
 }
 ECP_DEVICE_CMD_HANDLER_REQ_ONLY(ECP_CMD_ENUM, ecp_device_cmd_enum, BIT(1), struct ecp_request_enum);
 
-static enum ecp_result_code ecp_device_cmd_hello(struct ecp_device_cmd_handler_args *args)
+static enum ecp_result_code ecp_device_cmd_hello_v1(struct ecp_device_cmd_handler_args *args)
 {
-	LOG_INF("HELLO");
+	if (args->qdata_len != sizeof(struct ecp_request_hello)) {
+		return ECP_RES_INVALID_PARAM;
+	}
 	const struct ecp_request_hello *q = (void *)args->qdata;
 	struct ecp_response_hello *r = (void *)args->rdata;
 
@@ -331,8 +333,33 @@ static enum ecp_result_code ecp_device_cmd_hello(struct ecp_device_cmd_handler_a
 
 	return ECP_RES_SUCCESS;
 }
-ECP_DEVICE_CMD_HANDLER(ECP_CMD_HELLO, ecp_device_cmd_hello, BIT(1), struct ecp_request_hello,
-		       struct ecp_response_hello);
+
+static enum ecp_result_code ecp_device_cmd_hello_v2(struct ecp_device_cmd_handler_args *args)
+{
+	if (args->qdata_len != sizeof(struct ecp_request_hello_v2)) {
+		return ECP_RES_INVALID_PARAM;
+	}
+	const struct ecp_request_hello_v2 *q = (void *)args->qdata;
+
+	args->rdata_len = 0;
+
+	k_sleep(K_MSEC(q->delay_ms));
+
+	return ECP_RES_SUCCESS;
+}
+
+static enum ecp_result_code ecp_device_cmd_hello(struct ecp_device_cmd_handler_args *args)
+{
+	switch (args->version) {
+	case 1:
+		return ecp_device_cmd_hello_v1(args);
+	case 2:
+		return ecp_device_cmd_hello_v2(args);
+	default:
+		return ECP_RES_UNSUPPORTED_CMD_VERSION;
+	}
+}
+ECP_DEVICE_CMD_HANDLER_UNBOUND(ECP_CMD_HELLO, ecp_device_cmd_hello, BIT(1) | BIT(2));
 
 static enum ecp_result_code ecp_device_cmd_echo(struct ecp_device_cmd_handler_args *args)
 {
